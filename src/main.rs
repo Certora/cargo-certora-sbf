@@ -712,25 +712,29 @@ fn build_solana_package(
         "CARGO_TARGET_{}_RUSTFLAGS",
         target_triple.to_uppercase().replace("-", "_")
     );
-    let rustflags = env::var("RUSTFLAGS").ok().unwrap_or_default();
-    if env::var("RUSTFLAGS").is_ok() {
+
+    // -- space separated arguments. Multiple arguments per-entry are allowed
+    let mut flags: Vec<String> = vec![];
+
+    if let Ok(rustflags) = env::var("RUSTFLAGS") {
+        flags.push(rustflags);
         warn!(
-            "Removed RUSTFLAGS from cargo environment, because it overrides {}.",
+            "Removing RUSTFLAGS from environment because it overrides {}",
             cargo_target,
         );
-        env::remove_var("RUSTFLAGS")
+        env::remove_var("RUSTFLAGS");
     }
 
-    let target_rustflags = env::var(&cargo_target).unwrap_or_else(|_| "".to_string());
-    let mut target_rustflags = format!("{} {}", &rustflags, &target_rustflags);
-
+    if let Ok(target_rustflags) = env::var(&cargo_target) {
+        flags.push(target_rustflags);
+    }
     if config.remap_cwd && !config.debug {
-        target_rustflags.push_str(" -Zremap-cwd-prefix=");
+        flags.push("-Zremap-cwd-prefix=".into());
     }
 
     if config.debug {
         // Replace with -Zsplit-debuginfo=packed when stabilized.
-        target_rustflags.push_str(" -g")
+        flags.push("-g".into())
     }
 
     let certora_llvm_args = vec![
@@ -744,11 +748,10 @@ fn build_solana_package(
         "-C strip=none",
         "-C debuginfo=2",
     ];
-    target_rustflags.push(' ');
-    target_rustflags.push_str(&certora_llvm_args.join(" "));
+    flags.push(certora_llvm_args.join(" "));
 
-    if target_rustflags.len() > 0 {
-        env::set_var(&cargo_target, target_rustflags);
+    if !flags.is_empty() {
+        env::set_var(&cargo_target, flags.join(" "));
     }
     if config.verbose {
         debug!(
@@ -835,17 +838,14 @@ fn build_solana_package(
 
         if config.dump && file_older_or_missing(&program_unstripped_so, &program_dump) {
             let dump_script = config.sbf_sdk.join("scripts").join("dump.sh");
-            #[cfg(windows)]
-            {
+            if cfg!(windows) {
                 error!("Using Bash scripts from within a program is not supported on Windows, skipping `--dump`.");
                 error!(
                     "Please run \"{} {} {}\" from a Bash-supporting shell, then re-run this command to see the processed program dump.",
                     &dump_script.display(),
                     &program_unstripped_so.display(),
                     &program_dump.display());
-            }
-            #[cfg(not(windows))]
-            {
+            } else {
                 let output = spawn(
                     &dump_script,
                     [&program_unstripped_so, &program_dump],
