@@ -1,0 +1,33 @@
+[package]
+name = "cargo-certora-sbf"
+description = "Compile a local package and all of its dependencies using the Solana SBF SDK for Certora CVRL"
+publish = false
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bzip2 = "0.4.4"
+cargo_metadata = "0.15.4" 
+clap = { version = "3.1.5", features = ["cargo", "env"] }
+itertools = "0.12.1"
+log = { version = "0.4.26", features = ["std"] }
+regex = "1.11.1" 
+reqwest = { version = "0.12.14", default-features = false, features = ["blocking", "rustls-tls"] }
+semver = "1.0.26" 
+solana-file-download = "2.2.1"
+solana-keypair = "2.2.1" 
+solana-logger = "2.3.1"
+tar = "0.4.44"
+which = "7.0.2"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "2.1"
+serial_test = "2.0.0"
+
+[features]
+program = []
+
+[[bin]]
+name = "cargo-certora-sbf"
+path = "src/main.rs"
