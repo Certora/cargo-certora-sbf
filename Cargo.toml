@@ -1,9 +1,10 @@
 [package]
 name = "cargo-certora-sbf"
-description = "Compile a local package and all of its dependencies using the Solana SBF SDK for Certora CVRL"
-publish = false
+authors = ["Arie Gurfinkel <arie@certora.com>"]
+description = "Compile a local package and all of its dependencies using the Solana SBF SDK for Certora CVRL. Based on cargo-build-sbf."
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.81"
 
 [dependencies]
 bzip2 = "0.4.4"
