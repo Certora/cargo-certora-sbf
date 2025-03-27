@@ -737,10 +737,9 @@ fn build_solana_package(
         flags.push("-g".into())
     }
 
-    let certora_llvm_args = vec![
+    let mut certora_llvm_args = vec![
         "-C llvm-args=--combiner-store-merging=false",
         "-C llvm-args=--combiner-load-merging=false",
-        "-C llvm-args=--sbf-expand-memcpy-in-order",
         "-C llvm-args=--aggressive-instcombine-max-scan-instrs=0",
         "-C llvm-args=--combiner-reduce-load-op-store-width=false",
         "-C llvm-args=--combiner-shrink-load-replace-store-with-store=false",
@@ -748,6 +747,12 @@ fn build_solana_package(
         "-C strip=none",
         "-C debuginfo=2",
     ];
+
+    if platform_tools_version == "v1.41" {
+        // -- this option is not available in later platform tools
+        certora_llvm_args.push("-C llvm-args=--sbf-expand-memcpy-in-order");
+    }
+
     flags.push(certora_llvm_args.join(" "));
 
     if !flags.is_empty() {
@@ -1062,14 +1067,7 @@ fn main() {
                 .takes_value(false)
                 .help("Use verbose output"),
         )
-        .arg(
-            Arg::new("workspace")
-                .long("workspace")
-                .takes_value(false)
-                .alias("all")
-                .help("Build all Solana packages in the workspace"),
-        )
-        .arg(
+       .arg(
             Arg::new("jobs")
                 .short('j')
                 .long("jobs")
@@ -1160,5 +1158,4 @@ fn main() {
         debug!("manifest_path: {:?}", manifest_path);
     }
     build_solana(config, manifest_path);
-    // install_platform_tools_auto(&config);
 }
