@@ -147,8 +147,12 @@ where
 }
 
 pub fn is_version_string(arg: &str) -> Result<(), String> {
-    let (first, last) = arg.split_at(1);
-    if first == "v" && Version::parse(last).is_ok() {
+    let ver = if arg.matches('.').count() == 1 {
+        arg.to_string() + ".0"
+    } else {
+        arg.to_string()
+    };
+    if ver.starts_with('v') && Version::parse(&ver[1..]).is_ok() {
         Ok(())
     } else {
         Err("a version string may start with 'v' and contains major and minor version numbers separated by a dot, e.g. v1.32 or 1.32".to_string())
