@@ -25,6 +25,71 @@ use {
 const DEFAULT_PLATFORM_TOOLS_VERSION: &str = "v1.41";
 const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora-test";
 
+#[derive(Debug, Default)]
+struct RustFlags {
+    flags: Vec<String>,
+}
+
+impl RustFlags {
+    pub fn new() -> Self {
+        Self { flags: vec![] }
+    }
+    /// Add flags from an iterator
+    pub fn add<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.flags.extend(iter.into_iter())
+    }
+
+    pub fn add_flag(&mut self, flag: &str) {
+        self.flags.push(flag.to_string())
+    }
+
+    /// Add flags from environment variable
+    pub fn add_from_env(&mut self, env_var: &str) {
+        if let Ok(val) = env::var(env_var) {
+            self.add_from_str(&val);
+        }
+    }
+
+    /// Add flags from a whitespace separated string
+    pub fn add_from_str(&mut self, args: &str) {
+        self.add(args.split_whitespace().map(|s| s.to_string()))
+    }
+
+    /// Add an llvm-args flag, if it is not already present
+    pub fn add_llvm_flag(&mut self, arg: &str) {
+        if self.flags.iter().any(|v| v.ends_with(arg)) {
+            return;
+        }
+        self.flags.push(format!("-C llvm-args={}", arg))
+    }
+
+    /// Add an llvm-args argument (i.e., with value), if not present
+    pub fn add_llvm_arg(&mut self, arg: &str, val: &str) {
+        if self.flags.iter().any(|v| v.contains(arg)) {
+            return;
+        }
+        self.flags.push(format!("-C llvm-args={}={}", arg, val))
+    }
+
+    pub fn add_c_arg(&mut self, arg: &str, val: &str) {
+        if self.flags.iter().any(|v| v.contains(arg)) {
+            return;
+        }
+        self.flags.push(format!("-C {}={}", arg, val));
+    }
+
+    pub fn to_string(&self) -> String {
+        self.flags.join(" ")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.flags.is_empty()
+    }
+}
+
 #[derive(Debug)]
 struct Config<'a> {
     cargo_args: Vec<&'a str>,
@@ -718,61 +783,47 @@ fn build_solana_package(
     env::set_var("OBJDUMP", llvm_bin.join("llvm-objdump"));
     env::set_var("OBJCOPY", llvm_bin.join("llvm-objcopy"));
 
-    let cargo_target = format!(
+    let cargo_target_rustflags = format!(
         "CARGO_TARGET_{}_RUSTFLAGS",
         target_triple.to_uppercase().replace("-", "_")
     );
 
     // -- space separated arguments. Multiple arguments per-entry are allowed
-    let mut flags: Vec<String> = vec![];
+    let mut rust_flags = RustFlags::new();
+    rust_flags.add_from_env("RUSTFLAGS");
+    rust_flags.add_from_env(&cargo_target_rustflags);
 
-    if let Ok(rustflags) = env::var("RUSTFLAGS") {
-        flags.push(rustflags);
-        warn!(
-            "Removing RUSTFLAGS from environment because it overrides {}",
-            cargo_target,
-        );
-        env::remove_var("RUSTFLAGS");
-    }
-
-    if let Ok(target_rustflags) = env::var(&cargo_target) {
-        flags.push(target_rustflags);
-    }
     if config.remap_cwd && !config.debug {
-        flags.push("-Zremap-cwd-prefix=".into());
+        rust_flags.add_flag("-Zremap-cwd-prefix=");
     }
 
     if config.debug {
         // Replace with -Zsplit-debuginfo=packed when stabilized.
-        flags.push("-g".into())
+        rust_flags.add_flag("-g")
     }
 
-    let mut certora_llvm_args = vec![
-        "-C llvm-args=--combiner-store-merging=false",
-        "-C llvm-args=--combiner-load-merging=false",
-        "-C llvm-args=--aggressive-instcombine-max-scan-instrs=0",
-        "-C llvm-args=--combiner-reduce-load-op-store-width=false",
-        "-C llvm-args=--combiner-shrink-load-replace-store-with-store=false",
-        "-C llvm-args=--sroa-max-memcpy-split=8",
-        "-C strip=none",
-        "-C debuginfo=2",
-    ];
+    rust_flags.add_llvm_arg("--combiner-store-merging", "false");
+    rust_flags.add_llvm_arg("--combiner-load-merging", "false");
+    rust_flags.add_llvm_arg("--aggressive-instcombine-max-scan-instrs", "0");
+    rust_flags.add_llvm_arg("--combiner-reduce-load-op-store-width", "false");
+    rust_flags.add_llvm_arg("--combiner-shrink-load-replace-store-with-store", "false");
+    rust_flags.add_llvm_arg("--sroa-max-memcpy-split", "8");
+    rust_flags.add_c_arg("strip", "none");
+    rust_flags.add_c_arg("debuginfo", "2");
 
     if platform_tools_version.starts_with("v1.41") {
         // -- this option is not available in later platform tools
-        certora_llvm_args.push("-C llvm-args=--sbf-expand-memcpy-in-order");
+        rust_flags.add_llvm_flag("--sbf-expand-memcpy-in-order");
     }
 
-    flags.push(certora_llvm_args.join(" "));
-
-    if !flags.is_empty() {
-        env::set_var(&cargo_target, flags.join(" "));
+    if !rust_flags.is_empty() {
+        env::set_var(&cargo_target_rustflags, &rust_flags.to_string());
     }
     if config.verbose {
         debug!(
             "{}=\"{}\"",
-            cargo_target,
-            env::var(&cargo_target).ok().unwrap_or_default(),
+            cargo_target_rustflags,
+            env::var(&cargo_target_rustflags).ok().unwrap_or_default(),
         );
     }
 
