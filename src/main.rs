@@ -23,7 +23,7 @@ use {
 };
 
 const DEFAULT_PLATFORM_TOOLS_VERSION: &str = "v1.41";
-const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora-test";
+const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora";
 
 #[derive(Debug, Default)]
 struct RustFlags {
