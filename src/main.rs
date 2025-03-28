@@ -541,7 +541,7 @@ fn rustup_link_certora_toolchain(config: &Config) {
     }
 }
 
-fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Config) {
+fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Config) -> String {
     let platform_tools_version =
         validate_platform_tools_version(platform_tools_version, DEFAULT_PLATFORM_TOOLS_VERSION);
 
@@ -579,6 +579,8 @@ fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Con
         error!("Failed to install platform-tools: {}", err);
         exit(1);
     });
+
+    platform_tools_version
 }
 
 fn build_solana_package(
@@ -681,9 +683,13 @@ fn build_solana_package(
         "x86_64"
     };
 
-    if !config.skip_tools_install {
-        install_platform_tools(platform_tools_version, arch, config);
-    }
+    // -- update the version based on what is installed, it is possible
+    // -- that requested version was not available and another was substituted
+    let platform_tools_version = if !config.skip_tools_install {
+        install_platform_tools(platform_tools_version, arch, config)
+    } else {
+        platform_tools_version.to_string()
+    };
 
     if config.no_rustup_override {
         check_solana_target_installed(&target_triple);
@@ -752,7 +758,7 @@ fn build_solana_package(
         "-C debuginfo=2",
     ];
 
-    if platform_tools_version == "v1.41" {
+    if platform_tools_version.starts_with("v1.41") {
         // -- this option is not available in later platform tools
         certora_llvm_args.push("-C llvm-args=--sbf-expand-memcpy-in-order");
     }
