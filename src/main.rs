@@ -158,7 +158,11 @@ impl Default for Config<'_> {
     }
 }
 
-fn spawn<I, S>(program: &Path, args: I, generate_child_script_on_failure: bool) -> String
+fn spawn<I, S>(
+    program: &Path,
+    args: I,
+    generate_child_script_on_failure: bool,
+) -> Result<String, String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -174,15 +178,14 @@ where
         .args(args)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|err| {
-            error!("Failed to execute {}: {}", program.display(), err);
-            exit(1);
-        });
+        .map_err(|err| format!("Failed to execute {}: {}", program.display(), err))?;
 
-    let output = child.wait_with_output().expect("failed to wait on child");
+    let output = child
+        .wait_with_output()
+        .map_err(|err| format!("Failed to wait on child process: {err}"))?;
     if !output.status.success() {
         if !generate_child_script_on_failure {
-            exit(1);
+            return Err("Unexpected error".into());
         }
         error!("cargo-certora-sbf exited on command execution failure");
         let script_name = format!(
@@ -201,14 +204,15 @@ where
             "To rerun the failed command for debugging use {}",
             script_name,
         );
-        exit(1);
+        return Err("Script failed. See debug dump for detail".into());
     }
-    output
+
+    Ok(output
         .stdout
         .as_slice()
         .iter()
         .map(|&c| c as char)
-        .collect::<String>()
+        .collect::<String>())
 }
 
 pub fn is_version_string(arg: &str) -> Result<(), String> {
@@ -224,43 +228,32 @@ pub fn is_version_string(arg: &str) -> Result<(), String> {
     }
 }
 
-fn home_dir() -> PathBuf {
-    PathBuf::from(
-        #[cfg_attr(not(windows), allow(clippy::unnecessary_lazy_evaluations))]
-        env::var_os("HOME")
-            .or_else(|| {
-                if cfg!(windows) {
-                    debug!("Could not read env variable 'HOME', falling back to 'USERPROFILE'");
-                    env::var_os("USERPROFILE")
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                error!("Can't get home directory path");
-                exit(1);
-            }),
-    )
+fn home_dir() -> Result<PathBuf, String> {
+    let home_var = env::var_os("HOME")
+        .ok_or_else(|| -> String { "Missing HOME in the environment".into() })?;
+
+    Ok(PathBuf::from(home_var))
 }
 
-fn find_installed_platform_tools() -> Vec<String> {
-    let solana_cache_dir = home_dir().join(".cache").join("solana");
+fn find_installed_platform_tools() -> Result<Vec<String>, String> {
+    let solana_cache_dir = home_dir()?.join(".cache").join("solana");
     let package = PLATFORM_TOOLS_PACKAGE;
 
     if let Ok(dir) = std::fs::read_dir(solana_cache_dir) {
-        dir.filter_map(|e| match e {
-            Err(_) => None,
-            Ok(e) => {
-                if e.path().join(package).is_dir() {
-                    Some(e.path().file_name().unwrap().to_string_lossy().to_string())
-                } else {
-                    None
+        Ok(dir
+            .filter_map(|e| match e {
+                Err(_) => None,
+                Ok(e) => {
+                    if e.path().join(package).is_dir() {
+                        Some(e.path().file_name().unwrap().to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
                 }
-            }
-        })
-        .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>())
     } else {
-        Vec::new()
+        Ok(Vec::new())
     }
 }
 
@@ -275,21 +268,21 @@ fn get_latest_platform_tools_version() -> Result<String, String> {
         .to_owned())
 }
 
-fn get_base_rust_version(platform_tools_version: &str) -> String {
+fn get_base_rust_version(platform_tools_version: &str) -> Result<String, String> {
     let target_path =
-        make_platform_tools_path_for_version(PLATFORM_TOOLS_PACKAGE, platform_tools_version);
+        make_platform_tools_path_for_version(PLATFORM_TOOLS_PACKAGE, platform_tools_version)?;
     let rustc = target_path.join("rust").join("bin").join("rustc");
     if !rustc.exists() {
-        return String::from("");
+        return Err(format!("rustc not found at {:?}", rustc));
     }
     let args = vec!["--version"];
-    let output = spawn(&rustc, args, false);
+    let output = spawn(&rustc, args, false)?;
     let rustc_re = Regex::new(r"(rustc [0-9]+\.[0-9]+\.[0-9]+).*").unwrap();
     if rustc_re.is_match(output.as_str()) {
         let captures = rustc_re.captures(output.as_str()).unwrap();
-        captures[1].to_string()
+        Ok(captures[1].to_string())
     } else {
-        String::from("")
+        Err(format!("Unrecognized rustc version: {output}"))
     }
 }
 
@@ -317,18 +310,21 @@ fn semver_version(version: &str) -> String {
     }
 }
 
-fn validate_platform_tools_version(requested_version: &str, builtin_version: &str) -> String {
+fn validate_platform_tools_version(
+    requested_version: &str,
+    builtin_version: &str,
+) -> Result<String, String> {
     // Early return here in case it's the first time we're running `cargo build-sbf`
     // and we need to create the cache folders
     if requested_version == builtin_version {
-        return builtin_version.to_string();
+        return Ok(builtin_version.to_string());
     }
     let normalized_requested = semver_version(requested_version);
     let requested_semver = Version::parse(&normalized_requested).unwrap();
-    let installed_versions = find_installed_platform_tools();
+    let installed_versions = find_installed_platform_tools()?;
     for v in installed_versions {
         if requested_semver <= Version::parse(&semver_version(&v)).unwrap() {
-            return downloadable_version(requested_version);
+            return Ok(downloadable_version(requested_version));
         }
     }
     let latest_version = get_latest_platform_tools_version().unwrap_or_else(|err| {
@@ -341,22 +337,22 @@ fn validate_platform_tools_version(requested_version: &str, builtin_version: &st
     let normalized_latest = semver_version(&latest_version);
     let latest_semver = Version::parse(&normalized_latest).unwrap();
     if requested_semver <= latest_semver {
-        downloadable_version(requested_version)
+        Ok(downloadable_version(requested_version))
     } else {
         warn!(
             "Version {} is not valid, latest version is {}. Using the built-in version {}",
             requested_version, latest_version, builtin_version,
         );
-        builtin_version.to_string()
+        Ok(builtin_version.to_string())
     }
 }
 
-fn make_platform_tools_path_for_version(package: &str, version: &str) -> PathBuf {
-    home_dir()
+fn make_platform_tools_path_for_version(package: &str, version: &str) -> Result<PathBuf, String> {
+    Ok(home_dir()?
         .join(".cache")
         .join("solana")
         .join(version)
-        .join(package)
+        .join(package))
 }
 
 // Check whether a package is installed and install it if missing.
@@ -550,7 +546,7 @@ fn postprocess_dump(program_dump: &Path) {
 }
 
 // check whether custom solana toolchain is linked, and link it if it is not.
-fn rustup_link_certora_toolchain(config: &Config) {
+fn rustup_link_certora_toolchain(config: &Config) -> Result<(), String> {
     let toolchain_path = config
         .sbf_sdk
         .join("dependencies")
@@ -562,7 +558,7 @@ fn rustup_link_certora_toolchain(config: &Config) {
         &rustup,
         rustup_args,
         config.generate_child_script_on_failure,
-    );
+    )?;
     if config.verbose {
         debug!("{}", rustup_output);
     }
@@ -578,7 +574,7 @@ fn rustup_link_certora_toolchain(config: &Config) {
                     &rustup,
                     rustup_args,
                     config.generate_child_script_on_failure,
-                );
+                )?;
                 if config.verbose {
                     debug!("{}", output);
                 }
@@ -599,16 +595,21 @@ fn rustup_link_certora_toolchain(config: &Config) {
             &rustup,
             rustup_args,
             config.generate_child_script_on_failure,
-        );
+        )?;
         if config.verbose {
             debug!("{}", output);
         }
     }
+    Ok(())
 }
 
-fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Config) -> String {
+fn install_platform_tools(
+    platform_tools_version: &str,
+    arch: &str,
+    config: &Config,
+) -> Result<String, String> {
     let platform_tools_version =
-        validate_platform_tools_version(platform_tools_version, DEFAULT_PLATFORM_TOOLS_VERSION);
+        validate_platform_tools_version(platform_tools_version, DEFAULT_PLATFORM_TOOLS_VERSION)?;
 
     let platform_tools_download_file_name = if cfg!(target_os = "windows") {
         format!("platform-tools-windows-{arch}.tar.bz2")
@@ -618,7 +619,7 @@ fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Con
         format!("platform-tools-linux-{arch}.tar.bz2")
     };
     let package = PLATFORM_TOOLS_PACKAGE;
-    let target_path = make_platform_tools_path_for_version(package, &platform_tools_version);
+    let target_path = make_platform_tools_path_for_version(package, &platform_tools_version)?;
     install_if_missing(
         config,
         package,
@@ -627,25 +628,28 @@ fn install_platform_tools(platform_tools_version: &str, arch: &str, config: &Con
         &platform_tools_version,
         &target_path,
     )
-    .unwrap_or_else(|err| {
+    .map_err(|err| -> String {
         // The package version directory doesn't contain a valid
         // installation, and it should be removed.
-        let target_path_parent = target_path.parent().expect("Invalid package path");
+        let target_path_parent = target_path.parent();
+        if target_path_parent.is_none() {
+            return format!("No parent of {:?}", target_path);
+        }
+        let target_path_parent = target_path_parent.unwrap();
         if target_path_parent.exists() {
-            fs::remove_dir_all(target_path_parent).unwrap_or_else(|err| {
-                error!(
+            if fs::remove_dir_all(target_path_parent).is_err() {
+                return format!(
                     "Failed to remove {} while recovering from installation failure: {}",
                     target_path_parent.to_string_lossy(),
                     err,
                 );
-                exit(1);
-            });
+            }
         }
-        error!("Failed to install platform-tools: {}", err);
-        exit(1);
-    });
+        // -- expected error message
+        format!("Failed to install platform-tools: {}", err)
+    })?;
 
-    platform_tools_version
+    Ok(platform_tools_version)
 }
 
 fn build_solana_package(
@@ -653,7 +657,7 @@ fn build_solana_package(
     target_directory: &Path,
     package: &cargo_metadata::Package,
     metadata: &cargo_metadata::Metadata,
-) {
+) -> Result<(), String> {
     let program_name = {
         let cdylib_targets = package
             .targets
@@ -677,20 +681,18 @@ fn build_solana_package(
             }
             1 => Some(cdylib_targets[0].replace('-', "_")),
             _ => {
-                error!(
+                return Err(format!(
                     "{} crate contains multiple cdylib targets: {:?}",
                     package.name, cdylib_targets
-                );
-                exit(1);
+                ));
             }
         }
     };
 
     let legacy_program_feature_present = package.name == "solana-sdk";
-    let root_package_dir = &package.manifest_path.parent().unwrap_or_else(|| {
-        error!("Unable to get directory of {}", package.manifest_path);
-        exit(1);
-    });
+    let root_package_dir = &package.manifest_path.parent().ok_or_else(|| -> String {
+        format!("Unable to get directory of {}", package.manifest_path)
+    })?;
 
     let sbf_out_dir = config
         .sbf_out_dir
@@ -708,13 +710,12 @@ fn build_solana_package(
 
     let target_build_directory = target_directory.join(&target_triple).join("release");
 
-    env::set_current_dir(root_package_dir).unwrap_or_else(|err| {
-        error!(
+    env::set_current_dir(root_package_dir).map_err(|err| {
+        format!(
             "Unable to set current directory to {}: {}",
             root_package_dir, err
-        );
-        exit(1);
-    });
+        )
+    })?;
 
     let platform_tools_version = config.platform_tools_version.unwrap_or_else(|| {
         let workspace_tools_version = metadata.workspace_metadata.get("solana").and_then(|v| v.get("tools-version")).and_then(|v| v.as_str());
@@ -751,15 +752,15 @@ fn build_solana_package(
     // -- update the version based on what is installed, it is possible
     // -- that requested version was not available and another was substituted
     let platform_tools_version = if !config.skip_tools_install {
-        install_platform_tools(platform_tools_version, arch, config)
+        install_platform_tools(platform_tools_version, arch, config)?
     } else {
         platform_tools_version.to_string()
     };
 
     if config.no_rustup_override {
-        check_solana_target_installed(&target_triple);
+        check_solana_target_installed(&target_triple)?;
     } else {
-        rustup_link_certora_toolchain(config);
+        rustup_link_certora_toolchain(config)?;
         // RUSTC variable overrides cargo +<toolchain> mechanism of
         // selecting the rust compiler and makes cargo run a rust compiler
         // other than the one linked in Solana toolchain. We have to prevent
@@ -799,7 +800,7 @@ fn build_solana_package(
 
     if config.debug {
         // Replace with -Zsplit-debuginfo=packed when stabilized.
-        rust_flags.add_flag("-g")
+        rust_flags.add_flag("-g");
     }
 
     rust_flags.add_llvm_arg("--combiner-store-merging", "false");
@@ -862,7 +863,7 @@ fn build_solana_package(
         &cargo_build,
         &cargo_build_args,
         config.generate_child_script_on_failure,
-    );
+    )?;
     if config.verbose {
         debug!("{}", output);
     }
@@ -872,74 +873,69 @@ fn build_solana_package(
         let program_dump = sbf_out_dir.join(format!("{program_name}-dump.txt"));
         let program_keypair = sbf_out_dir.join(format!("{program_name}-keypair.json"));
 
-        fn file_older_or_missing(prerequisite_file: &Path, target_file: &Path) -> bool {
-            let prerequisite_metadata = fs::metadata(prerequisite_file).unwrap_or_else(|err| {
-                error!(
+        fn file_older_or_missing(
+            prerequisite_file: &Path,
+            target_file: &Path,
+        ) -> Result<bool, String> {
+            let prerequisite_metadata = fs::metadata(prerequisite_file).map_err(|err| {
+                format!(
                     "Unable to get file metadata for {}: {}",
                     prerequisite_file.display(),
                     err
-                );
-                exit(1);
-            });
+                )
+            })?;
 
-            if let Ok(target_metadata) = fs::metadata(target_file) {
+            let res = if let Ok(target_metadata) = fs::metadata(target_file) {
                 use std::time::UNIX_EPOCH;
                 prerequisite_metadata.modified().unwrap_or(UNIX_EPOCH)
                     > target_metadata.modified().unwrap_or(UNIX_EPOCH)
             } else {
                 true
-            }
+            };
+            Ok(res)
         }
 
         if !program_keypair.exists() {
-            write_keypair_file(&Keypair::new(), &program_keypair).unwrap_or_else(|err| {
-                error!(
+            write_keypair_file(&Keypair::new(), &program_keypair).map_err(|err| {
+                format!(
                     "Unable to get create {}: {}",
                     program_keypair.display(),
                     err
-                );
-                exit(1);
-            });
+                )
+            })?;
         }
 
-        if config.dump && file_older_or_missing(&program_unstripped_so, &program_dump) {
+        if config.dump && file_older_or_missing(&program_unstripped_so, &program_dump)? {
             let dump_script = config.sbf_sdk.join("scripts").join("dump.sh");
-            if cfg!(windows) {
-                error!("Using Bash scripts from within a program is not supported on Windows, skipping `--dump`.");
-                error!(
-                    "Please run \"{} {} {}\" from a Bash-supporting shell, then re-run this command to see the processed program dump.",
-                    &dump_script.display(),
-                    &program_unstripped_so.display(),
-                    &program_dump.display());
-            } else {
-                let output = spawn(
-                    &dump_script,
-                    [&program_unstripped_so, &program_dump],
-                    config.generate_child_script_on_failure,
-                );
-                if config.verbose {
-                    debug!("{}", output);
-                }
+            let output = spawn(
+                &dump_script,
+                [&program_unstripped_so, &program_dump],
+                config.generate_child_script_on_failure,
+            )?;
+            if config.verbose {
+                debug!("{}", output);
             }
+
             postprocess_dump(&program_dump);
         }
     } else if config.dump {
         warn!("Note: --dump is only available for crates with a cdylib target");
     }
+    Ok(())
 }
 
 // allow user to set proper `rustc` into RUSTC or into PATH
-fn check_solana_target_installed(target: &str) {
+fn check_solana_target_installed(target: &str) -> Result<(), String> {
     let rustc = env::var("RUSTC").unwrap_or("rustc".to_owned());
     let rustc = PathBuf::from(rustc);
-    let output = spawn(&rustc, ["--print", "target-list"], false);
+    let output = spawn(&rustc, ["--print", "target-list"], false)?;
     if !output.contains(target) {
-        error!("Provided {:?} does not have {} target. The Solana rustc must be available in $PATH or the $RUSTC environment variable for the build to succeed.", rustc, target);
-        exit(1);
+        return Err(format!("Provided {:?} does not have {} target. The Solana rustc must be available in $PATH or the $RUSTC environment variable for the build to succeed.", rustc, target));
     }
+    Ok(())
 }
 
-fn build_solana(config: Config, manifest_path: Option<PathBuf>) {
+fn build_solana(config: Config, manifest_path: Option<PathBuf>) -> Result<(), String> {
     let mut metadata_command = cargo_metadata::MetadataCommand::new();
     if let Some(manifest_path) = manifest_path {
         metadata_command.manifest_path(manifest_path);
@@ -948,10 +944,7 @@ fn build_solana(config: Config, manifest_path: Option<PathBuf>) {
         metadata_command.other_options(vec!["--offline".to_string()]);
     }
 
-    let metadata = metadata_command.exec().unwrap_or_else(|err| {
-        error!("Failed to obtain package metadata: {}", err);
-        exit(1);
-    });
+    let metadata = metadata_command.exec().map_err(|err| format!("{err}"))?;
 
     let target_dir = config
         .target_directory
@@ -959,8 +952,7 @@ fn build_solana(config: Config, manifest_path: Option<PathBuf>) {
         .unwrap_or(metadata.target_directory.clone());
 
     if let Some(root_package) = metadata.root_package() {
-        build_solana_package(&config, target_dir.as_ref(), root_package, &metadata);
-        return;
+        return build_solana_package(&config, target_dir.as_ref(), root_package, &metadata);
     }
 
     let all_sbf_packages = metadata
@@ -979,16 +971,17 @@ fn build_solana(config: Config, manifest_path: Option<PathBuf>) {
         .collect::<Vec<_>>();
 
     if all_sbf_packages.len() > 1 {
-        error!("Compiling multiple crates at once in a workspace is not supported.");
-        exit(1);
+        return Err("Compiling multiple crates at once in a workspace is not supported.".into());
     }
 
     for package in all_sbf_packages {
-        build_solana_package(&config, target_dir.as_ref(), package, &metadata);
+        build_solana_package(&config, target_dir.as_ref(), package, &metadata)?;
     }
+
+    Ok(())
 }
 
-fn main() {
+fn app_run() -> Result<(), String> {
     solana_logger::setup();
     let default_config = Config::default();
     let default_sbf_sdk = format!("{}", default_config.sbf_sdk.display());
@@ -1004,7 +997,7 @@ fn main() {
 
     // The following line is scanned by CI configuration script to
     // separate cargo caches according to the version of platform-tools.
-    let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION);
+    let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION)?;
     let version = format!(
         "{}\nplatform-tools {}\n{}",
         crate_version!(),
@@ -1162,15 +1155,13 @@ fn main() {
     {
         let target_path = Utf8PathBuf::from(*target_dir);
         // Directory needs to exist in order to canonicalize it
-        fs::create_dir_all(&target_path).unwrap_or_else(|err| {
-            error!("Unable to create target-dir directory {target_dir}: {err}");
-            exit(1);
-        });
+        fs::create_dir_all(&target_path)
+            .map_err(|err| format!("Unable to create target-dir directory {target_dir}: {err}"))?;
+
         // Canonicalize the path to avoid issues with relative paths
-        let canonicalized = target_path.canonicalize_utf8().unwrap_or_else(|err| {
-            error!("Unable to canonicalize provided target-dir directory {target_path}: {err}");
-            exit(1);
-        });
+        let canonicalized = target_path.canonicalize_utf8().map_err(|err| {
+            format!("Unable to canonicalize provided target-dir directory {target_path}: {err}")
+        })?;
         target_dir_string = canonicalized.to_string();
         *target_dir = &target_dir_string;
         Some(canonicalized)
@@ -1181,14 +1172,13 @@ fn main() {
     let config = Config {
         cargo_args,
         target_directory,
-        sbf_sdk: fs::canonicalize(&sbf_sdk).unwrap_or_else(|err| {
-            error!(
+        sbf_sdk: fs::canonicalize(&sbf_sdk).map_err(|err| {
+            format!(
                 "Solana SDK path does not exist: {}: {}",
                 sbf_sdk.display(),
                 err
-            );
-            exit(1);
-        }),
+            )
+        })?,
         sbf_out_dir: sbf_out_dir.map(|sbf_out_dir| {
             if sbf_out_dir.is_absolute() {
                 sbf_out_dir
@@ -1218,5 +1208,11 @@ fn main() {
         debug!("{:?}", config);
         debug!("manifest_path: {:?}", manifest_path);
     }
-    build_solana(config, manifest_path);
+    build_solana(config, manifest_path)
+}
+fn main() {
+    if let Err(msg) = app_run() {
+        eprintln!("error: {}", msg);
+        exit(1);
+    }
 }
