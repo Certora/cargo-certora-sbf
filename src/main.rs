@@ -25,6 +25,8 @@ use {
 
 const DEFAULT_PLATFORM_TOOLS_VERSION: &str = "v1.41";
 const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora";
+const PLATFORM_TOOLS_URL: &str =
+    "https://github.com/Certora/certora-solana-platform-tools/releases/download";
 
 #[derive(Debug, Default)]
 struct RustFlags {
@@ -1269,7 +1271,11 @@ struct CertoraSbfArgs {
     manifest: clap_cargo::Manifest,
     #[command(flatten)]
     features: clap_cargo::Features,
-    #[arg(long, env = "SBF_OUT_PATH", help = "Output directory for build artifacts")]
+    #[arg(
+        long,
+        env = "SBF_OUT_PATH",
+        help = "Output directory for build artifacts"
+    )]
     sbf_out_dir: Option<PathBuf>,
     #[arg(long, env = "SBF_SDK_PATH", help = "Path to Solana SDK")]
     sbf_sdk: Option<PathBuf>,
@@ -1299,7 +1305,172 @@ struct CertoraSbfArgs {
     arch: SbfArch,
 }
 
+impl CertoraSbfArgs {
+    fn validate_platform_tools_version(&self, tools_version: &str) -> Result<String, String> {
+        if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
+            return Ok(DEFAULT_PLATFORM_TOOLS_VERSION.to_string());
+        }
+
+        let normalized_requested = semver_version(tools_version);
+        let requested_semver =
+            Version::parse(&normalized_requested).map_err(|err| err.to_string())?;
+
+        let installed_versions = find_installed_platform_tools()?;
+        for v in installed_versions {
+            if requested_semver
+                <= Version::parse(&semver_version(&v)).map_err(|err| err.to_string())?
+            {
+                return Ok(downloadable_version(tools_version));
+            }
+        }
+        let latest_version = get_latest_platform_tools_version()?;
+        let normalized_latest = semver_version(&latest_version);
+
+        let latest_semver = Version::parse(&normalized_latest).map_err(|err| err.to_string())?;
+        if requested_semver <= latest_semver {
+            Ok(downloadable_version(tools_version))
+        } else {
+            Err(format!("version {tools_version} is not valid. Latest available version is {latest_version}"))
+        }
+    }
+
+    fn install_if_missing(
+        &self,
+        download_file_name: &str,
+        platform_tools_version: &str,
+        target_path: &Path,
+    ) -> Result<(), String> {
+        let sbf_sdk = self.sbf_sdk.as_ref().unwrap();
+        if self.force_tools_install {
+            // if forcing install, clean up first
+            if target_path.is_dir() {
+                debug!("Removing directory: {:?}", target_path);
+                fs::remove_dir_all(target_path).map_err(|err| err.to_string())?
+            }
+
+            let source_base = sbf_sdk.join("dependencies");
+            if source_base.exists() {
+                let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
+                if source_path.exists() {
+                    debug!("Removing file {:?}", source_path);
+                    fs::remove_file(source_path).map_err(|err| err.to_string())?;
+                }
+            }
+        }
+
+        // Check whether the target path is an empty directory, and remove it.
+        if target_path.is_dir()
+            && target_path
+                .read_dir()
+                .map_err(|err| err.to_string())?
+                .next()
+                .is_none()
+        {
+            debug!("Removing directory: {:?}", target_path);
+            fs::remove_dir(target_path).map_err(|err| err.to_string())?;
+        }
+
+        // Check whether the package is already in ~/.cache/solana.
+        // Download it and place in the proper location if not found.
+        if !target_path.is_dir()
+            && !target_path
+                .symlink_metadata()
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        {
+            if target_path.exists() {
+                debug!("Removing file: {:?}", target_path);
+                fs::remove_file(target_path).map_err(|err| err.to_string())?;
+            }
+            fs::create_dir_all(target_path).map_err(|err| err.to_string())?;
+
+            let url = format!(
+                "{PLATFORM_TOOLS_URL}/{platform_tools_version}-certora/{download_file_name}"
+            );
+            let download_file_path = target_path.join(download_file_name);
+            if download_file_path.exists() {
+                fs::remove_file(&download_file_path).map_err(|err| err.to_string())?;
+            }
+            download_file(url.as_str(), &download_file_path, true, &mut None)?;
+            let zip = File::open(&download_file_path).map_err(|err| err.to_string())?;
+            let tar = BzDecoder::new(BufReader::new(zip));
+            let mut archive = Archive::new(tar);
+            archive.unpack(target_path).map_err(|err| err.to_string())?;
+            fs::remove_file(download_file_path).map_err(|err| err.to_string())?;
+        }
+
+        // Make a symbolic link source_path -> target_path in the
+        // platform-tools-sdk/sbf/dependencies directory if no valid link found.
+        let source_base = sbf_sdk.join("dependencies");
+        if !source_base.exists() {
+            fs::create_dir_all(&source_base).map_err(|err| err.to_string())?;
+        }
+        let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
+
+        // Check whether the correct symbolic link exists.
+        let invalid_link = if let Ok(link_target) = source_path.read_link() {
+            if link_target.ne(target_path) {
+                fs::remove_file(&source_path).map_err(|err| err.to_string())?;
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        };
+        if invalid_link {
+            std::os::unix::fs::symlink(target_path, source_path).map_err(|err| err.to_string())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn install_platform_tools(
+        &mut self,
+        requested_version: Option<&str>,
+    ) -> Result<(), String> {
+        if self.skip_tools_install {
+            return Ok(());
+        }
+
+        let arch = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+
+        let requested_version = requested_version.unwrap_or_else(|| &self.tools_version);
+        let requested_version = self.validate_platform_tools_version(requested_version)?;
+
+        let platform_tools_download_file_name = if cfg!(target_os = "macos") {
+            format!("platform-tools-osx-{arch}.tar.bz2")
+        } else {
+            format!("platform-tools-linux-{arch}.tar.bz2")
+        };
+        let package = PLATFORM_TOOLS_PACKAGE;
+
+        let target_path = make_platform_tools_path_for_version(package, &requested_version)?;
+        if let Err(err) = self.install_if_missing(
+            &platform_tools_download_file_name,
+            &requested_version,
+            &target_path,
+        ) {
+            if target_path.exists() {
+                fs::remove_dir_all(&target_path).map_err(|err| {
+                    format!(
+                        "failed to remove {:?} while recovering from installation failure: {err}",
+                        target_path
+                    )
+                })?;
+            }
+            Err(format!("Failed to install platform-tools: {err}"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 fn main() {
-    let CertoraSbfCargoCli::CertoraSbf(args) = CertoraSbfCargoCli::parse();
+    let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::parse();
     println!("{:?}", args);
 }
