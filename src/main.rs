@@ -997,16 +997,17 @@ fn app_run() -> Result<(), String> {
 
     // The following line is scanned by CI configuration script to
     // separate cargo caches according to the version of platform-tools.
-    let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION)?;
-    let version = format!(
-        "{}\nplatform-tools {}\n{}",
-        crate_version!(),
-        DEFAULT_PLATFORM_TOOLS_VERSION,
-        rust_base_version,
-    );
+    // let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION)?;
+    // let rust_base_version = "UNKNOWN".to_string();
+    // let version = format!(
+    //     "{}\nplatform-tools-certora {}\n{}",
+    //     crate_version!(),
+    //     DEFAULT_PLATFORM_TOOLS_VERSION,
+    //     rust_base_version,
+    // );
     let matches = clap::Command::new(crate_name!())
         .about(crate_description!())
-        .version(version.as_str())
+        .version(crate_version!())
         .arg(
             Arg::new("sbf_out_dir")
                 .env("SBF_OUT_PATH")
