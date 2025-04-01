@@ -1468,9 +1468,122 @@ impl CertoraSbfArgs {
             Ok(())
         }
     }
+
+    fn check_sbf_sdk_path(&mut self) -> Result<(), String> {
+        if self.sbf_sdk.is_some() {
+            return Ok(());
+        }
+
+        let solana_exe = which::which("solana")
+            .map_err(|err| format!("`solana` cli not found on the path: {err}"))?;
+
+        let solana_exe_parent = solana_exe
+            .parent()
+            .ok_or_else(|| format!("could not find parent directory of {:?}", solana_exe))?
+            .to_path_buf();
+
+        let sbf_sdk1 = solana_exe_parent.join("sdk").join("sbf");
+
+        let sbf_sdk2 = solana_exe_parent.join("platform-tools-sdk").join("sbf");
+
+        self.sbf_sdk = if sbf_sdk1.is_dir() {
+            Some(sbf_sdk1)
+        } else if sbf_sdk2.is_dir() {
+            Some(sbf_sdk2)
+        } else {
+            None
+        };
+
+        if self.sbf_sdk.is_none() {
+            Err("could not locate SBF_SDK. Make sure solana cli is installed and properly configured.".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+ fn rustup_link_toolchain(&self) -> Result<(), String> {
+    let toolchain_path = self
+        .sbf_sdk
+        .as_ref()
+        .unwrap()
+        .join("dependencies")
+        .join(PLATFORM_TOOLS_PACKAGE)
+        .join("rust");
+    let rustup = PathBuf::from("rustup");
+    let rustup_args = vec!["toolchain", "list", "-v"];
+    let rustup_output = spawn(
+        &rustup,
+        &rustup_args,
+        self.generate_child_script_on_failure,
+    )?;
+    if self.verbose {
+        eprintln!("rustup {}", rustup_args.join(" "));
+        eprintln!("{rustup_output}");
+    }
+    let mut do_link = true;
+    for line in rustup_output.lines() {
+        if line.starts_with("certora-solana") {
+            let mut it = line.split_whitespace();
+            let _ = it.next();
+            let path = it.next();
+            if path.unwrap() != toolchain_path.to_str().unwrap() {
+                let rustup_args = vec!["toolchain", "uninstall", "certora-solana"];
+                let output = spawn(
+                    &rustup,
+                    &rustup_args,
+                    self.generate_child_script_on_failure,
+                )?;
+                if self.verbose {
+                    eprintln!("rustup {}", rustup_args.join(" "));
+                    eprintln!("{output}");
+                }
+            } else {
+                do_link = false;
+            }
+            break;
+        }
+    }
+    if do_link {
+        let rustup_args = vec![
+            "toolchain",
+            "link",
+            "certora-solana",
+            toolchain_path.to_str().unwrap(),
+        ];
+        let output = spawn(
+            &rustup,
+            &rustup_args,
+            self.generate_child_script_on_failure,
+        )?;
+        if self.verbose {
+            eprintln!("rustup {}", rustup_args.join(" "));
+            eprintln!("{output}");
+        }
+    }
+    Ok(())
+}
+
+   
+
+    pub fn exec(&mut self) -> Result<(), String> {
+        // -- make sure sbf_sdk path is properly set
+        self.check_sbf_sdk_path()?;
+
+        // -- if requested, install platform tools
+        if self.force_tools_install {
+            self.install_platform_tools(None)?;
+            self.rustup_link_toolchain()?;
+        }
+
+        Ok(())
+    }
 }
 
 fn main() {
     let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::parse();
-    println!("{:?}", args);
+    //println!("{:?}", args);
+    if let Err(err) = args.exec() {
+        eprint!("Error: {err}");
+        exit(1);
+    }
 }
