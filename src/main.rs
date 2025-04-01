@@ -7,6 +7,7 @@ use {
     log::*,
     regex::Regex,
     semver::Version,
+    serde_json::json,
     solana_file_download::download_file,
     solana_keypair::{write_keypair_file, Keypair},
     std::{
@@ -110,6 +111,7 @@ struct Config<'a> {
     verbose: bool,
     jobs: Option<String>,
     arch: &'a str,
+    json: bool,
 }
 
 impl Default for Config<'_> {
@@ -154,6 +156,7 @@ impl Default for Config<'_> {
             verbose: false,
             jobs: None,
             arch: "sbf",
+            json: false,
         }
     }
 }
@@ -696,8 +699,7 @@ fn build_solana_package(
 
     let sbf_out_dir = config
         .sbf_out_dir
-        .as_ref()
-        .cloned()
+        .clone()
         .unwrap_or_else(|| target_directory.join("deploy"));
 
     let target_triple = if config.arch == "v0" {
@@ -712,7 +714,7 @@ fn build_solana_package(
 
     env::set_current_dir(root_package_dir).map_err(|err| {
         format!(
-            "Unable to set current directory to {}: {}",
+            "unable to set current directory to {}: {}",
             root_package_dir, err
         )
     })?;
@@ -921,6 +923,7 @@ fn build_solana_package(
     } else if config.dump {
         warn!("Note: --dump is only available for crates with a cdylib target");
     }
+
     Ok(())
 }
 
@@ -981,239 +984,322 @@ fn build_solana(config: Config, manifest_path: Option<PathBuf>) -> Result<(), St
     Ok(())
 }
 
-fn app_run() -> Result<(), String> {
-    solana_logger::setup();
-    let default_config = Config::default();
-    let default_sbf_sdk = format!("{}", default_config.sbf_sdk.display());
+// fn app_run() -> Result<(), String> {
+//     solana_logger::setup();
+//     let default_config = Config::default();
+//     let default_sbf_sdk = format!("{}", default_config.sbf_sdk.display());
 
-    let mut args = env::args().collect::<Vec<_>>();
-    // When run as a cargo subcommand, the first program argument is the subcommand name.
-    // Remove it
-    if let Some(arg1) = args.get(1) {
-        if arg1 == "certora-sbf" {
-            args.remove(1);
-        }
-    }
+//     let mut args = env::args().collect::<Vec<_>>();
+//     // When run as a cargo subcommand, the first program argument is the subcommand name.
+//     // Remove it
+//     if let Some(arg1) = args.get(1) {
+//         if arg1 == "certora-sbf" {
+//             args.remove(1);
+//         }
+//     }
 
-    // The following line is scanned by CI configuration script to
-    // separate cargo caches according to the version of platform-tools.
-    // let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION)?;
-    // let rust_base_version = "UNKNOWN".to_string();
-    // let version = format!(
-    //     "{}\nplatform-tools-certora {}\n{}",
-    //     crate_version!(),
-    //     DEFAULT_PLATFORM_TOOLS_VERSION,
-    //     rust_base_version,
-    // );
-    let matches = clap::Command::new(crate_name!())
-        .about(crate_description!())
-        .version(crate_version!())
-        .arg(
-            Arg::new("sbf_out_dir")
-                .env("SBF_OUT_PATH")
-                .long("sbf-out-dir")
-                .value_name("DIRECTORY")
-                .takes_value(true)
-                .help("Place final SBF build artifacts in this directory"),
-        )
-        .arg(
-            Arg::new("sbf_sdk")
-                .env("SBF_SDK_PATH")
-                .long("sbf-sdk")
-                .value_name("PATH")
-                .takes_value(true)
-                .default_value(&default_sbf_sdk)
-                .help("Path to the Solana SBF SDK"),
-        )
-        .arg(
-            Arg::new("cargo_args")
-                .help("Arguments passed directly to `cargo build`")
-                .multiple_occurrences(true)
-                .multiple_values(true)
-                .last(true),
-        )
-        .arg(
-            Arg::new("remap_cwd")
-                .long("disable-remap-cwd")
-                .takes_value(false)
-                .help("Disable remap of cwd prefix and preserve full path strings in binaries"),
-        )
-        .arg(
-            Arg::new("debug")
-                .long("debug")
-                .takes_value(false)
-                .help("Enable debug symbols"),
-        )
-        .arg(
-            Arg::new("dump")
-                .long("dump")
-                .takes_value(false)
-                .help("Dump ELF information to a text file on success"),
-        )
-        .arg(
-            Arg::new("features")
-                .long("features")
-                .value_name("FEATURES")
-                .takes_value(true)
-                .multiple_occurrences(true)
-                .multiple_values(true)
-                .help("Space-separated list of features to activate"),
-        )
-        .arg(
-            Arg::new("force_tools_install")
-                .long("force-tools-install")
-                .takes_value(false)
-                .conflicts_with("skip_tools_install")
-                .help("Download and install platform-tools even when existing tools are located"),
-        )
-        .arg(
-            Arg::new("skip_tools_install")
-                .long("skip-tools-install")
-                .takes_value(false)
-                .conflicts_with("force_tools_install")
-                .help("Skip downloading and installing platform-tools, assuming they are properly mounted"),
-            )
-            .arg(
-                Arg::new("no_rustup_override")
-                .long("no-rustup-override")
-                .takes_value(false)
-                .conflicts_with("force_tools_install")
-                .help("Do not use rustup to manage the toolchain. By default, cargo-certora-sbf invokes rustup to find the Solana rustc using a `+solana` toolchain override. This flag disables that behavior."),
-        )
-        .arg(
-            Arg::new("generate_child_script_on_failure")
-                .long("generate-child-script-on-failure")
-                .takes_value(false)
-                .help("Generate a shell script to rerun a failed subcommand"),
-        )
-        .arg(
-            Arg::new("manifest_path")
-                .long("manifest-path")
-                .value_name("PATH")
-                .takes_value(true)
-                .help("Path to Cargo.toml"),
-        )
-        .arg(
-            Arg::new("no_default_features")
-                .long("no-default-features")
-                .takes_value(false)
-                .help("Do not activate the `default` feature"),
-        )
-        .arg(
-            Arg::new("offline")
-                .long("offline")
-                .takes_value(false)
-                .help("Run without accessing the network"),
-        )
-        .arg(
-            Arg::new("tools_version")
-                .long("tools-version")
-                .value_name("STRING")
-                .takes_value(true)
-                .validator(is_version_string)
-                .help(
-                    "platform-tools version to use or to install, a version string, e.g. \"v1.32\"",
-                ),
-        )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .takes_value(false)
-                .help("Use verbose output"),
-        )
-       .arg(
-            Arg::new("jobs")
-                .short('j')
-                .long("jobs")
-                .takes_value(true)
-                .value_name("N")
-                .validator(|val| val.parse::<usize>().map_err(|e| e.to_string()))
-                .help("Number of parallel jobs, defaults to # of CPUs"),
-        )
-        .arg(
-            Arg::new("arch")
-                .long("arch")
-                .possible_values(["sbf", "v0", "v1", "v2", "v3"])
-                .default_value("sbf")
-                .help("Build for the given target architecture"),
-        )
-        .get_matches_from(args);
+//     // The following line is scanned by CI configuration script to
+//     // separate cargo caches according to the version of platform-tools.
+//     // let rust_base_version = get_base_rust_version(DEFAULT_PLATFORM_TOOLS_VERSION)?;
+//     // let rust_base_version = "UNKNOWN".to_string();
+//     // let version = format!(
+//     //     "{}\nplatform-tools-certora {}\n{}",
+//     //     crate_version!(),
+//     //     DEFAULT_PLATFORM_TOOLS_VERSION,
+//     //     rust_base_version,
+//     // );
+//     let matches = clap::Command::new(crate_name!())
+//         .about(crate_description!())
+//         .version(crate_version!())
+//         .arg(
+//             Arg::new("sbf_out_dir")
+//                 .env("SBF_OUT_PATH")
+//                 .long("sbf-out-dir")
+//                 .value_name("DIRECTORY")
+//                 .takes_value(true)
+//                 .help("Place final SBF build artifacts in this directory"),
+//         )
+//         .arg(
+//             Arg::new("sbf_sdk")
+//                 .env("SBF_SDK_PATH")
+//                 .long("sbf-sdk")
+//                 .value_name("PATH")
+//                 .takes_value(true)
+//                 .default_value(&default_sbf_sdk)
+//                 .help("Path to the Solana SBF SDK"),
+//         )
+//         .arg(
+//             Arg::new("cargo_args")
+//                 .help("Arguments passed directly to `cargo build`")
+//                 .multiple_occurrences(true)
+//                 .multiple_values(true)
+//                 .last(true),
+//         )
+//         .arg(
+//             Arg::new("remap_cwd")
+//                 .long("disable-remap-cwd")
+//                 .takes_value(false)
+//                 .help("Disable remap of cwd prefix and preserve full path strings in binaries"),
+//         )
+//         .arg(
+//             Arg::new("debug")
+//                 .long("debug")
+//                 .takes_value(false)
+//                 .help("Enable debug symbols"),
+//         )
+//         .arg(
+//             Arg::new("dump")
+//                 .long("dump")
+//                 .takes_value(false)
+//                 .help("Dump ELF information to a text file on success"),
+//         )
+//         .arg(
+//             Arg::new("features")
+//                 .long("features")
+//                 .value_name("FEATURES")
+//                 .takes_value(true)
+//                 .multiple_occurrences(true)
+//                 .multiple_values(true)
+//                 .help("Space-separated list of features to activate"),
+//         )
+//         .arg(
+//             Arg::new("force_tools_install")
+//                 .long("force-tools-install")
+//                 .takes_value(false)
+//                 .conflicts_with("skip_tools_install")
+//                 .help("Download and install platform-tools even when existing tools are located"),
+//         )
+//         .arg(
+//             Arg::new("skip_tools_install")
+//                 .long("skip-tools-install")
+//                 .takes_value(false)
+//                 .conflicts_with("force_tools_install")
+//                 .help("Skip downloading and installing platform-tools, assuming they are properly mounted"),
+//             )
+//             .arg(
+//                 Arg::new("no_rustup_override")
+//                 .long("no-rustup-override")
+//                 .takes_value(false)
+//                 .conflicts_with("force_tools_install")
+//                 .help("Do not use rustup to manage the toolchain. By default, cargo-certora-sbf invokes rustup to find the Solana rustc using a `+solana` toolchain override. This flag disables that behavior."),
+//         )
+//         .arg(
+//             Arg::new("generate_child_script_on_failure")
+//                 .long("generate-child-script-on-failure")
+//                 .takes_value(false)
+//                 .help("Generate a shell script to rerun a failed subcommand"),
+//         )
+//         .arg(
+//             Arg::new("manifest_path")
+//                 .long("manifest-path")
+//                 .value_name("PATH")
+//                 .takes_value(true)
+//                 .help("Path to Cargo.toml"),
+//         )
+//         .arg(
+//             Arg::new("no_default_features")
+//                 .long("no-default-features")
+//                 .takes_value(false)
+//                 .help("Do not activate the `default` feature"),
+//         )
+//         .arg(
+//             Arg::new("offline")
+//                 .long("offline")
+//                 .takes_value(false)
+//                 .help("Run without accessing the network"),
+//         )
+//         .arg(
+//             Arg::new("tools_version")
+//                 .long("tools-version")
+//                 .value_name("STRING")
+//                 .takes_value(true)
+//                 .validator(is_version_string)
+//                 .help(
+//                     "platform-tools version to use or to install, a version string, e.g. \"v1.32\"",
+//                 ),
+//         )
+//         .arg(
+//             Arg::new("verbose")
+//                 .short('v')
+//                 .long("verbose")
+//                 .takes_value(false)
+//                 .help("Use verbose output"),
+//         )
+//         .arg(Arg::new("json")
+//                 .long("json")
+//                 .takes_value(false)
+//                 .help("Output status in JSON")
+//         )
+//        .arg(
+//             Arg::new("jobs")
+//                 .short('j')
+//                 .long("jobs")
+//                 .takes_value(true)
+//                 .value_name("N")
+//                 .validator(|val| val.parse::<usize>().map_err(|e| e.to_string()))
+//                 .help("Number of parallel jobs, defaults to # of CPUs"),
+//         )
+//         .arg(
+//             Arg::new("arch")
+//                 .long("arch")
+//                 .possible_values(["sbf", "v0", "v1", "v2", "v3"])
+//                 .default_value("sbf")
+//                 .help("Build for the given target architecture"),
+//         )
+//         .get_matches_from(args);
 
-    let sbf_sdk: PathBuf = matches.value_of_t_or_exit("sbf_sdk");
-    let sbf_out_dir: Option<PathBuf> = matches.value_of_t("sbf_out_dir").ok();
+//     let sbf_sdk: PathBuf = matches.value_of_t_or_exit("sbf_sdk");
+//     let sbf_out_dir: Option<PathBuf> = matches.value_of_t("sbf_out_dir").ok();
 
-    let mut cargo_args = matches
-        .values_of("cargo_args")
-        .map(|vals| vals.collect::<Vec<_>>())
-        .unwrap_or_default();
+//     let mut cargo_args = matches
+//         .values_of("cargo_args")
+//         .map(|vals| vals.collect::<Vec<_>>())
+//         .unwrap_or_default();
 
-    let target_dir_string;
-    let target_directory = if let Some(target_dir) = cargo_args
-        .iter_mut()
-        .skip_while(|x| x != &&"--target-dir")
-        .nth(1)
-    {
-        let target_path = Utf8PathBuf::from(*target_dir);
-        // Directory needs to exist in order to canonicalize it
-        fs::create_dir_all(&target_path)
-            .map_err(|err| format!("Unable to create target-dir directory {target_dir}: {err}"))?;
+//     let target_dir_string;
+//     let target_directory = if let Some(target_dir) = cargo_args
+//         .iter_mut()
+//         .skip_while(|x| x != &&"--target-dir")
+//         .nth(1)
+//     {
+//         let target_path = Utf8PathBuf::from(*target_dir);
+//         // Directory needs to exist in order to canonicalize it
+//         fs::create_dir_all(&target_path)
+//             .map_err(|err| format!("Unable to create target-dir directory {target_dir}: {err}"))?;
 
-        // Canonicalize the path to avoid issues with relative paths
-        let canonicalized = target_path.canonicalize_utf8().map_err(|err| {
-            format!("Unable to canonicalize provided target-dir directory {target_path}: {err}")
-        })?;
-        target_dir_string = canonicalized.to_string();
-        *target_dir = &target_dir_string;
-        Some(canonicalized)
-    } else {
-        None
-    };
+//         // Canonicalize the path to avoid issues with relative paths
+//         let canonicalized = target_path.canonicalize_utf8().map_err(|err| {
+//             format!("Unable to canonicalize provided target-dir directory {target_path}: {err}")
+//         })?;
+//         target_dir_string = canonicalized.to_string();
+//         *target_dir = &target_dir_string;
+//         Some(canonicalized)
+//     } else {
+//         None
+//     };
 
-    let config = Config {
-        cargo_args,
-        target_directory,
-        sbf_sdk: fs::canonicalize(&sbf_sdk).map_err(|err| {
-            format!(
-                "Solana SDK path does not exist: {}: {}",
-                sbf_sdk.display(),
-                err
-            )
-        })?,
-        sbf_out_dir: sbf_out_dir.map(|sbf_out_dir| {
-            if sbf_out_dir.is_absolute() {
-                sbf_out_dir
-            } else {
-                env::current_dir()
-                    .expect("Unable to get current working directory")
-                    .join(sbf_out_dir)
-            }
-        }),
-        platform_tools_version: matches.value_of("tools_version"),
-        dump: matches.is_present("dump"),
-        features: matches.values_of_t("features").ok().unwrap_or_default(),
-        force_tools_install: matches.is_present("force_tools_install"),
-        skip_tools_install: matches.is_present("skip_tools_install"),
-        no_rustup_override: matches.is_present("no_rustup_override"),
-        generate_child_script_on_failure: matches.is_present("generate_child_script_on_failure"),
-        no_default_features: matches.is_present("no_default_features"),
-        remap_cwd: !matches.is_present("remap_cwd"),
-        debug: matches.is_present("debug"),
-        offline: matches.is_present("offline"),
-        verbose: matches.is_present("verbose"),
-        jobs: matches.value_of_t("jobs").ok(),
-        arch: matches.value_of("arch").unwrap(),
-    };
-    let manifest_path: Option<PathBuf> = matches.value_of_t("manifest_path").ok();
-    if config.verbose {
-        debug!("{:?}", config);
-        debug!("manifest_path: {:?}", manifest_path);
-    }
-    build_solana(config, manifest_path)
+//     let config = Config {
+//         cargo_args,
+//         target_directory,
+//         sbf_sdk: fs::canonicalize(&sbf_sdk).map_err(|err| {
+//             format!(
+//                 "Solana SDK path does not exist: {}: {}",
+//                 sbf_sdk.display(),
+//                 err
+//             )
+//         })?,
+//         sbf_out_dir: sbf_out_dir.map(|sbf_out_dir| {
+//             if sbf_out_dir.is_absolute() {
+//                 sbf_out_dir
+//             } else {
+//                 env::current_dir()
+//                     .expect("Unable to get current working directory")
+//                     .join(sbf_out_dir)
+//             }
+//         }),
+//         platform_tools_version: matches.value_of("tools_version"),
+//         dump: matches.is_present("dump"),
+//         features: matches.values_of_t("features").ok().unwrap_or_default(),
+//         force_tools_install: matches.is_present("force_tools_install"),
+//         skip_tools_install: matches.is_present("skip_tools_install"),
+//         no_rustup_override: matches.is_present("no_rustup_override"),
+//         generate_child_script_on_failure: matches.is_present("generate_child_script_on_failure"),
+//         no_default_features: matches.is_present("no_default_features"),
+//         remap_cwd: !matches.is_present("remap_cwd"),
+//         debug: matches.is_present("debug"),
+//         offline: matches.is_present("offline"),
+//         verbose: matches.is_present("verbose"),
+//         jobs: matches.value_of_t("jobs").ok(),
+//         arch: matches.value_of("arch").unwrap(),
+//         json: matches.is_present("json"),
+//     };
+//     let manifest_path: Option<PathBuf> = matches.value_of_t("manifest_path").ok();
+//     if config.verbose {
+//         debug!("{:?}", config);
+//         debug!("manifest_path: {:?}", manifest_path);
+//     }
+//     build_solana(config, manifest_path)
+// }
+// fn main() {
+//     if let Err(msg) = app_run() {
+//         eprintln!("error: {}", msg);
+//         println!("{}", json!({"success": false, "return_code": 1}));
+//         exit(1);
+//     }
+// }
+
+use clap::Parser;
+
+#[derive(Parser)] // requires `derive` feature
+#[command(name = "cargo")]
+#[command(bin_name = "cargo")]
+#[command(styles = CLAP_STYLING)]
+enum CertoraSbfCargoCli {
+    CertoraSbf(CertoraSbfArgs),
 }
+
+// See also `clap_cargo::style::CLAP_STYLING`
+pub const CLAP_STYLING: clap::builder::styling::Styles = clap::builder::styling::Styles::styled()
+    .header(clap_cargo::style::HEADER)
+    .usage(clap_cargo::style::USAGE)
+    .literal(clap_cargo::style::LITERAL)
+    .placeholder(clap_cargo::style::PLACEHOLDER)
+    .error(clap_cargo::style::ERROR)
+    .valid(clap_cargo::style::VALID)
+    .invalid(clap_cargo::style::INVALID);
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, clap::ValueEnum)]
+enum SbfArch {
+    /// sbfv1 from platform tools <= 1.41
+    Sbf,
+    /// SBPF v0
+    V0,
+    /// SBPF v1
+    V1,
+    /// SBPF v2
+    V2,
+    /// SBPF v3
+    V3,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+struct CertoraSbfArgs {
+    #[command(flatten)]
+    manifest: clap_cargo::Manifest,
+    #[command(flatten)]
+    features: clap_cargo::Features,
+    #[arg(long, env = "SBF_OUT_PATH", help = "Output directory for build artifacts")]
+    sbf_out_dir: Option<PathBuf>,
+    #[arg(long, env = "SBF_SDK_PATH", help = "Path to Solana SDK")]
+    sbf_sdk: Option<PathBuf>,
+    #[arg(long, help = "Additional arguments to pass to cargo")]
+    cargo_args: Option<Vec<String>>,
+    #[arg(long)]
+    remap_cwd: bool,
+    #[arg(long, help = "Enable debug information in compiled binary")]
+    debug: bool,
+    #[arg(long, help = "Dump sbf assembly for compiled binary")]
+    dump: bool,
+    #[arg(long, help = "Force fresh install of platform tools")]
+    force_tools_install: bool,
+    #[arg(long, help = "Do not attempt to install platform tools")]
+    skip_tools_install: bool,
+    #[arg(long, help = "Do not override rustup to point to platform tools")]
+    no_rustup_override: bool,
+    #[arg(long, help = "Generate shell script on failure for debugging")]
+    generate_child_script_on_failure: bool,
+    #[arg(long, default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(), help = "Platform tools version to use")]
+    tools_version: String,
+    #[arg(long, short, help = "Verbose output")]
+    verbose: bool,
+    #[arg(long, short, help = "Number of parallel jobs")]
+    jobs: Option<usize>,
+    #[arg(long, value_enum, default_value_t = SbfArch::Sbf, help = "Specify sbf/sbpf architecture")]
+    arch: SbfArch,
+}
+
 fn main() {
-    if let Err(msg) = app_run() {
-        eprintln!("error: {}", msg);
-        exit(1);
-    }
+    let CertoraSbfCargoCli::CertoraSbf(args) = CertoraSbfCargoCli::parse();
+    println!("{:?}", args);
 }
