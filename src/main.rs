@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025 Certora 
+
 use {
     bzip2::bufread::BzDecoder,
-    cargo_metadata::{CrateType, Metadata, MetadataCommand, Package, Target},
+    cargo_metadata::{camino::Utf8Path, CrateType, Metadata, MetadataCommand, Package, Target},
     clap::Parser,
     clap_verbosity_flag::VerbosityFilter,
     itertools::Itertools,
     log::{debug, error, info},
     semver::Version,
-    serde_json::json,
+    serde_json::{json, to_string_pretty, Value},
     solana_file_download::download_file,
     std::{
         cell::RefCell,
@@ -20,6 +23,8 @@ use {
     tar::Archive,
 };
 
+const CERTORA_META_KEY: &str = "certora";
+const SOURCES_META_KEY: &str = "sources";
 const DEFAULT_PLATFORM_TOOLS_VERSION: &str = "v1.41";
 const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora";
 const PLATFORM_TOOLS_URL: &str =
@@ -117,9 +122,12 @@ where
         .map_err(|err| format!("Failed to wait on child process: {err}"))?;
     if !output.status.success() {
         if !generate_child_script_on_failure {
-            return Err("Unexpected error".into());
+            return Err(format!(
+                "execution of {:?} terminated with {}",
+                program, output.status
+            ));
         }
-        error!("cargo-certora-sbf exited on command execution failure");
+        debug!("generating dump script for failed spawn");
         let script_name = format!(
             "cargo-certora-sbf-child-script-{}.sh",
             program.file_name().unwrap().to_str().unwrap(),
@@ -133,7 +141,7 @@ where
         writeln!(out, "{}", msg).unwrap();
         out.flush().unwrap();
         error!(
-            "To rerun the failed command for debugging use {}",
+            "to rerun the failed command for debugging use {}",
             script_name,
         );
         return Err("Script failed. See debug dump for detail".into());
@@ -326,6 +334,8 @@ struct CertoraSbfArgs {
     jobs: Option<usize>,
     #[arg(long, value_enum, default_value_t = SbfArch::Sbf, help = "Specify sbf/sbpf architecture")]
     arch: SbfArch,
+    #[arg(long, help = "Output JSON summary of the build")]
+    json: bool,
 
     #[clap(skip)]
     metadata: RefCell<Option<Metadata>>,
@@ -583,7 +593,7 @@ impl CertoraSbfArgs {
         Ok(())
     }
 
-    pub fn exec(&mut self) -> Result<(), String> {
+    pub fn exec(&mut self) -> Result<Value, String> {
         self.check_sbf_sdk_path()?;
 
         // -- install platform tools if needed (or forced)
@@ -596,9 +606,7 @@ impl CertoraSbfArgs {
 
         // -- find solana package and compile it
         let package = self.find_solana_package()?;
-        self.build_solana_package(&package)?;
-
-        Ok(())
+        self.build_solana_package(&package)
     }
 
     /// Returns reference to metadata
@@ -653,7 +661,7 @@ impl CertoraSbfArgs {
         }
     }
 
-    fn build_solana_package(&self, package: &Package) -> Result<(), String> {
+    fn build_solana_package(&self, package: &Package) -> Result<Value, String> {
         let package_dir = package.manifest_path.parent().ok_or_else(|| {
             format!(
                 "unexpected missing parent directory of {}",
@@ -663,14 +671,10 @@ impl CertoraSbfArgs {
         env::set_current_dir(package_dir)
             .map_err(|err| format!("unable to change cwd to {}: {}", package_dir, err))?;
 
-        let _target =
+        let target =
             find_first_cdylib_target(package).ok_or_else(|| "cdylib not found".to_string())?;
 
-        // let name = target.name.replace('-', "_");
-        // let metadata = self.metadata.as_ref().unwrap();
-        // let target_directory = metadata.target_directory.clone();
         let target_triple = self.arch.to_string();
-        // let target_build_directory = target_directory.join(&target_triple).join("release");
 
         let llvm_bin = self
             .sbf_sdk
@@ -770,7 +774,49 @@ impl CertoraSbfArgs {
         info!("{:?} {}", cargo_build, cargo_build_args.join(" "));
         info!("{}", output);
 
-        Ok(())
+        let name = target.name.replace('-', "_");
+        let metadata_ref = self.metadata.borrow();
+        let metadata = metadata_ref.as_ref().unwrap();
+        let workspace_root = &metadata.workspace_root;
+        let target_build_directory = metadata
+            .target_directory
+            .join(&target_triple)
+            .join("release");
+        let relative_directory = target_build_directory
+            .strip_prefix(workspace_root)
+            .map_err(|err| format!("cannot compute relative directory due to {err}"))?;
+
+        let package_root = package.manifest_path.parent().unwrap();
+
+        let sources = package
+            .metadata
+            .get(CERTORA_META_KEY)
+            .and_then(|x| x.get(SOURCES_META_KEY))
+            .map(|x| x.clone())
+            .unwrap_or_else(|| json!([]));
+
+        let mut sources = if let Value::Array(items) = &sources {
+            items
+                .into_iter()
+                .filter(|x| x.is_string())
+                .map(|x| package_root.join(Utf8Path::new(x.as_str().unwrap())))
+                .map(|x| x.strip_prefix(workspace_root).unwrap().to_string())
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+
+        // add Cargo.toml from the workspace
+        sources.push("Cargo.toml".into());
+
+        let data = json!({
+             "project_directory": workspace_root,
+             "executables": relative_directory.join(format!("{name}.so")),
+             "sources": sources,
+             "success": true,
+             "return_code": 0,
+        });
+        Ok(data)
     }
 }
 
@@ -785,8 +831,21 @@ fn main() {
         .filter_level(args.verbose.log_level_filter())
         .init();
 
-    if let Err(err) = args.exec() {
-        error!("{err}");
-        exit(1);
+    match args.exec() {
+        Ok(json) => {
+            println!("{}", to_string_pretty(&json).unwrap());
+        }
+        Err(err) => {
+            error!("{err}");
+            if args.json {
+                let data = json!({
+                    "success": "false",
+                    "return_code": 1,
+                    "error_reason": err.to_string(),
+                });
+                println!("{}", to_string_pretty(&data).unwrap());
+            }
+            exit(1);
+        }
     }
 }
