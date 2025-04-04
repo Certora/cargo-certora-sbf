@@ -155,7 +155,7 @@ where
         .collect::<String>())
 }
 
-fn is_version_string(arg: &str) -> Result<(), String> {
+/* fn is_version_string(arg: &str) -> Result<(), String> {
     let ver = if arg.matches('.').count() == 1 {
         arg.to_string() + ".0"
     } else {
@@ -166,7 +166,7 @@ fn is_version_string(arg: &str) -> Result<(), String> {
     } else {
         Err("a version string may start with 'v' and contains major and minor version numbers separated by a dot, e.g. v1.32 or 1.32".to_string())
     }
-}
+} */
 
 fn home_dir() -> Result<PathBuf, String> {
     let home_var = env::var_os("HOME")
@@ -240,16 +240,6 @@ fn make_platform_tools_path_for_version(package: &str, version: &str) -> Result<
         .join(package))
 }
 
-// allow user to set proper `rustc` into RUSTC or into PATH
-fn check_solana_target_installed(target: &str) -> Result<(), String> {
-    let rustc = env::var("RUSTC").unwrap_or("rustc".to_owned());
-    let rustc = PathBuf::from(rustc);
-    let output = spawn(&rustc, ["--print", "target-list"], false)?;
-    if !output.contains(target) {
-        return Err(format!("Provided {:?} does not have {} target. The Solana rustc must be available in $PATH or the $RUSTC environment variable for the build to succeed.", rustc, target));
-    }
-    Ok(())
-}
 
 #[derive(Parser)] // requires `derive` feature
 #[command(name = "cargo")]
