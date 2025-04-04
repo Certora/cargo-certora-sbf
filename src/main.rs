@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2025 Certora 
+// Copyright 2025 Certora
 
 use {
     bzip2::bufread::BzDecoder,
@@ -25,6 +25,9 @@ use {
 
 const CERTORA_META_KEY: &str = "certora";
 const SOURCES_META_KEY: &str = "sources";
+const SOLANA_INLINING_KEY: &str = "solana_inlining";
+const SOLANA_SUMMARIES_KEY: &str = "solana_summaries";
+
 const DEFAULT_PLATFORM_TOOLS_VERSION: &str = "v1.41";
 const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora";
 const PLATFORM_TOOLS_URL: &str =
@@ -33,6 +36,22 @@ const PLATFORM_TOOLS_URL: &str =
 #[derive(Debug, Default)]
 struct RustFlags {
     flags: Vec<String>,
+}
+
+/// Join path to a json value
+///
+/// if v is a String, join it to the path
+/// if v is an Array, apply join_path to all array elements
+/// otherwise, return the value as is
+fn join_path(path: &Utf8Path, v: &Value) -> Value {
+    match v {
+        Value::String(s) => serde_json::to_value(path.join(s)).unwrap(),
+        Value::Array(items) => {
+            serde_json::to_value(items.iter().map(|x| join_path(path, x)).collect::<Vec<_>>())
+                .unwrap()
+        }
+        _ => v.clone(),
+    }
 }
 
 impl RustFlags {
@@ -239,7 +258,6 @@ fn make_platform_tools_path_for_version(package: &str, version: &str) -> Result<
         .join(version)
         .join(package))
 }
-
 
 #[derive(Parser)] // requires `derive` feature
 #[command(name = "cargo")]
@@ -772,11 +790,14 @@ impl CertoraSbfArgs {
             .target_directory
             .join(&target_triple)
             .join("release");
-        let relative_directory = target_build_directory
+        let rel_target_build_dir = target_build_directory
             .strip_prefix(workspace_root)
             .map_err(|err| format!("cannot compute relative directory due to {err}"))?;
 
+        // -- absolute package root
         let package_root = package.manifest_path.parent().unwrap();
+        // -- relative package root
+        let rel_package_root = package_root.strip_prefix(workspace_root).unwrap();
 
         let sources = package
             .metadata
@@ -785,27 +806,39 @@ impl CertoraSbfArgs {
             .map(|x| x.clone())
             .unwrap_or_else(|| json!([]));
 
-        let mut sources = if let Value::Array(items) = &sources {
-            items
-                .into_iter()
-                .filter(|x| x.is_string())
-                .map(|x| package_root.join(Utf8Path::new(x.as_str().unwrap())))
-                .map(|x| x.strip_prefix(workspace_root).unwrap().to_string())
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let mut sources = join_path(rel_package_root, &sources);
 
-        // add Cargo.toml from the workspace
-        sources.push("Cargo.toml".into());
+        // add Cargo.toml from the workspace root
+        sources.as_array_mut().unwrap().push("Cargo.toml".into());
 
-        let data = json!({
+        let mut data = json!({
              "project_directory": workspace_root,
-             "executables": relative_directory.join(format!("{name}.so")),
+             "executables": rel_target_build_dir.join(format!("{name}.so")),
              "sources": sources,
              "success": true,
              "return_code": 0,
         });
+
+        package
+            .metadata
+            .get(CERTORA_META_KEY)
+            .and_then(|x| x.get(SOLANA_INLINING_KEY))
+            .map(|x| {
+                data.as_object_mut()
+                    .unwrap()
+                    .insert(SOLANA_INLINING_KEY.into(), join_path(rel_package_root, x))
+            });
+
+        package
+            .metadata
+            .get(CERTORA_META_KEY)
+            .and_then(|x| x.get(SOLANA_SUMMARIES_KEY))
+            .map(|x| {
+                data.as_object_mut()
+                    .unwrap()
+                    .insert(SOLANA_SUMMARIES_KEY.into(), join_path(rel_package_root, x))
+            });
+
         Ok(data)
     }
 }
@@ -823,7 +856,9 @@ fn main() {
 
     match args.exec() {
         Ok(json) => {
-            println!("{}", to_string_pretty(&json).unwrap());
+            if args.json {
+                println!("{}", to_string_pretty(&json).unwrap());
+            }
         }
         Err(err) => {
             error!("{err}");
