@@ -65,6 +65,15 @@ Run cargo certora-sbf --help for the full list of options.
     ```sh
     cargo certora-sbf --tools-version v1.43
     ```
+
+3. If you get an error message like below:
+
+    ```
+    error: not a directory: '/Users/some_user/.local/share/solana/install/active_release/bin/sdk/sbf/dependencies/platform-tools-certora/rust/bin'
+    [ERROR] execution of "rustup" terminated with exit status: 1
+    ```
+
+    try reinstalling via `cargo certora-sbf --force-tools-install`.
 ## 📄 License
 
 Apache 2.0. See LICENSE for details.
