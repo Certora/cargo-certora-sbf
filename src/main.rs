@@ -337,8 +337,8 @@ struct CertoraSbfArgs {
     #[arg(long, help = "Generate shell script on failure for debugging")]
     generate_child_script_on_failure: bool,
     #[arg(
-        long, 
-        default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(), 
+        long,
+        default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(),
         id = "tools_version",
         value_name = "VERSION",
         help = "Platform tools version to use")]
@@ -860,7 +860,7 @@ fn main() {
         }
     }
 
-   let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::from_arg_matches(&matches)
+    let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::from_arg_matches(&matches)
         .unwrap_or_else(|e| {
             e.exit();
         });
