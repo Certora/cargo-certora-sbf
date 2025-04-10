@@ -223,8 +223,13 @@ fn get_latest_platform_tools_version() -> Result<String, String> {
     let version = path.file_name().unwrap().to_string_lossy().to_string();
     Ok(version
         .strip_suffix("-certora")
-        .ok_or_else(|| format!("Unexpected version (must end with -certora): {version}"))?
-        .to_owned())
+        .ok_or_else(|| {
+            format!(
+                "Unexpected version `{version}`. \
+            Unexpectedly does not end with `-certora`."
+            )
+        })?
+        .into())
 }
 
 fn downloadable_version(version: &str) -> String {
@@ -386,7 +391,10 @@ impl CertoraSbfArgs {
         if requested_semver <= latest_semver {
             Ok(downloadable_version(tools_version))
         } else {
-            Err(format!("version {tools_version} is not valid. Latest available version is {latest_version}"))
+            Err(format!(
+                "version `{tools_version}` appears to be newer than latest available version. \
+            Latest available version is `{latest_version}`"
+            ))
         }
     }
 
@@ -599,9 +607,23 @@ impl CertoraSbfArgs {
                 "certora-solana",
                 toolchain_path.to_str().unwrap(),
             ];
-            let output = spawn(&rustup, &rustup_args, self.generate_child_script_on_failure)?;
-            info!("rustup {}", rustup_args.join(" "));
-            info!("{output}");
+
+            match spawn(&rustup, &rustup_args, self.generate_child_script_on_failure) {
+                Ok(output) => {
+                    info!("rustup {}", rustup_args.join(" "));
+                    info!("{output}");
+                }
+                Err(err) => {
+                    info!("rustup {}", rustup_args.join(" "));
+                    error!("{err}");
+                    error!(
+                        "toolchain registration failed. \
+                            Try reinstalling certora-platform-tools using \
+                             `cargo certora-sbf --force-tools-install`"
+                    );
+                    return Err(err);
+                }
+            }
         }
         Ok(())
     }
@@ -668,7 +690,11 @@ impl CertoraSbfArgs {
         // -- fail if number of cdylib packages is unexpected
         let len = all_cdylib_packages.len();
         match len {
-            0 => Err("no cdylib packages found".to_string()),
+            0 => Err(
+                "no cargo package with a cdylib target was found in the current workspace. \
+                    Ensure that your Cargo.toml specifies a cdylib target."
+                    .to_string(),
+            ),
             1 => Ok(all_cdylib_packages[0].clone()),
             _ => Err("more than one cdylib package found".to_string()),
         }
@@ -684,8 +710,11 @@ impl CertoraSbfArgs {
         env::set_current_dir(package_dir)
             .map_err(|err| format!("unable to change cwd to {}: {}", package_dir, err))?;
 
-        let target =
-            find_first_cdylib_target(package).ok_or_else(|| "cdylib not found".to_string())?;
+        let target = find_first_cdylib_target(package).ok_or_else(|| {
+            "no cargo package with a cdylib target was found in the current workspace. \
+            Ensure that your Cargo.toml specifies a cdylib target."
+                .to_string()
+        })?;
 
         let target_triple = self.arch.to_string();
 
