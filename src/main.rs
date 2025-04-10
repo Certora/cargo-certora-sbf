@@ -4,7 +4,7 @@
 use {
     bzip2::bufread::BzDecoder,
     cargo_metadata::{camino::Utf8Path, CrateType, Metadata, MetadataCommand, Package, Target},
-    clap::{parser::ValueSource, CommandFactory, FromArgMatches, Parser},
+    clap::{CommandFactory, FromArgMatches, Parser},
     clap_verbosity_flag::VerbosityFilter,
     itertools::Itertools,
     log::{debug, error, info},
@@ -881,13 +881,14 @@ fn main() {
     let cmd = CertoraSbfCargoCli::command();
     let matches = cmd.get_matches();
 
-    if let Some((_name, matches)) = matches.subcommand() {
-        if matches.value_source(&"tools_version") == Some(ValueSource::DefaultValue) {
-            println!("source for tools version is default");
-        } else {
-            println!("tools version is explicitly requested");
-        }
-    }
+    // if let Some((_name, matches)) = matches.subcommand() {
+    //     use clap::parser::ValueSource;
+    //     if matches.value_source(&"tools_version") == Some(ValueSource::DefaultValue) {
+    //         println!("source for tools version is default");
+    //     } else {
+    //         println!("tools version is explicitly requested");
+    //     }
+    // }
 
     let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::from_arg_matches(&matches)
         .unwrap_or_else(|e| {
