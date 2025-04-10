@@ -868,9 +868,12 @@ fn main() {
 
     // setup log level
     env_logger::builder()
-        // .format(|buf, record| writeln!(buf, "{}: {}", record.level(), record.args()))
-        .format_timestamp(None)
-        .format_target(false)
+        .format(|buf, record| {
+            let level = record.level();
+            let style = buf.default_level_style(level);
+            let level = level.to_string().to_lowercase();
+            writeln!(buf, "{style}{}{style:#}: {}", level, record.args())
+        })
         .filter_level(args.verbose.log_level_filter())
         .init();
 
