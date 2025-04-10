@@ -336,7 +336,12 @@ struct CertoraSbfArgs {
     no_rustup_override: bool,
     #[arg(long, help = "Generate shell script on failure for debugging")]
     generate_child_script_on_failure: bool,
-    #[arg(long, default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(), help = "Platform tools version to use")]
+    #[arg(
+        long, 
+        default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(), 
+        id = "tools_version",
+        value_name = "VERSION",
+        help = "Platform tools version to use")]
     tools_version: String,
     #[arg(long, short, help = "Number of parallel jobs")]
     jobs: Option<usize>,
