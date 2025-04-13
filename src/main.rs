@@ -16,6 +16,7 @@ use {
         env,
         ffi::OsStr,
         fs::{self, File},
+        io,
         io::{prelude::*, BufReader, BufWriter},
         path::{Path, PathBuf},
         process::{exit, Command, Stdio},
@@ -51,6 +52,41 @@ fn join_path(path: &Utf8Path, v: &Value) -> Value {
                 .unwrap()
         }
         _ => v.clone(),
+    }
+}
+
+/// Creates or updates a symbolic link.
+///
+/// # Arguments
+/// * `original` - The desired target of the symbolic link.
+/// * `link` - The path of the symbolic link.
+///
+/// # Errors
+/// Returns an error if any filesystem operations fail.
+fn create_or_update_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+    if original.exists() {
+        let current_target = fs::read_link(original)?;
+        if current_target != link {
+            fs::remove_file(original)?; // Remove old symlink or file
+            std::os::unix::fs::symlink(original, link)?;
+        }
+    } else {
+        std::os::unix::fs::symlink(original, link)?;
+    }
+    Ok(())
+}
+
+/// Returns `true` if the directory exists and is empty, `false` if it exists and is not empty.
+/// Returns an error if the path does not exist or is not a directory.
+pub fn is_empty_dir(path: &Path) -> io::Result<bool> {
+    if path.is_dir() {
+        let mut entries = fs::read_dir(path)?;
+        Ok(entries.next().is_none())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("`{path:?}` is not a directory"),
+        ))
     }
 }
 
@@ -187,33 +223,29 @@ where
     }
 } */
 
-fn home_dir() -> Result<PathBuf, String> {
-    let home_var = env::var_os("HOME")
-        .ok_or_else(|| -> String { "Missing HOME in the environment".into() })?;
-
-    Ok(PathBuf::from(home_var))
+fn get_home_dir_path() -> Result<PathBuf, String> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing HOME environment variable".to_string())
 }
 
-fn find_installed_platform_tools() -> Result<Vec<String>, String> {
-    let solana_cache_dir = home_dir()?.join(".cache").join("solana");
+fn find_installed_platform_tools() -> io::Result<Vec<String>> {
+    let solana_cache_dir = get_home_dir_path()
+        .map_err(io::Error::other)?
+        .join(".cache")
+        .join("solana");
     let package = PLATFORM_TOOLS_PACKAGE;
 
-    if let Ok(dir) = std::fs::read_dir(solana_cache_dir) {
-        Ok(dir
-            .filter_map(|e| match e {
-                Err(_) => None,
-                Ok(e) => {
-                    if e.path().join(package).is_dir() {
-                        Some(e.path().file_name().unwrap().to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                }
-            })
-            .collect::<Vec<_>>())
-    } else {
-        Ok(Vec::new())
-    }
+    Ok(std::fs::read_dir(solana_cache_dir)?
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.is_dir() && path.join(package).is_dir() {
+                Some(path.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
 }
 
 fn get_latest_platform_tools_version() -> Result<String, String> {
@@ -226,13 +258,13 @@ fn get_latest_platform_tools_version() -> Result<String, String> {
         .ok_or_else(|| {
             format!(
                 "Unexpected version `{version}`. \
-            Unexpectedly does not end with `-certora`."
+            The version must end with suffix `-certora`."
             )
         })?
         .into())
 }
 
-fn downloadable_version(version: &str) -> String {
+fn to_release_version(version: &str) -> String {
     if version.starts_with('v') {
         version.to_string()
     } else {
@@ -240,7 +272,7 @@ fn downloadable_version(version: &str) -> String {
     }
 }
 
-fn semver_version(version: &str) -> String {
+fn to_semver(version: &str) -> String {
     let starts_with_v = version.starts_with('v');
     let dots = version.as_bytes().iter().fold(
         0,
@@ -257,7 +289,7 @@ fn semver_version(version: &str) -> String {
 }
 
 fn make_platform_tools_path_for_version(package: &str, version: &str) -> Result<PathBuf, String> {
-    Ok(home_dir()?
+    Ok(get_home_dir_path()?
         .join(".cache")
         .join("solana")
         .join(version)
@@ -366,30 +398,46 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
         .find(|t| t.crate_types.contains(&CrateType::CDyLib))
 }
 
+/// This implementation provides functionality for managing and validating
+/// platform tools versions, installing platform tools, and building Solana
+/// packages using the Certora SBF SDK.
+///
+/// # Usage
+///
+/// This implementation is designed to be used as part of the Certora SBF SDK
+/// for managing platform tools and building Solana packages. It provides
+/// comprehensive error handling and logging to ensure a smooth development
+/// experience.
+///
+/// - Ensure that the Solana CLI is installed and properly configured before
+///   using this implementation.
+/// - The implementation relies on specific environment variables and paths for
+///   configuring the build process and linking the toolchain.
+/// Installs the platform tools if they are missing or if a forced installation is requested.
 impl CertoraSbfArgs {
     fn validate_platform_tools_version(&self, tools_version: &str) -> Result<String, String> {
         if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
             return Ok(DEFAULT_PLATFORM_TOOLS_VERSION.to_string());
         }
 
-        let normalized_requested = semver_version(tools_version);
+        let normalized_requested = to_semver(tools_version);
         let requested_semver =
             Version::parse(&normalized_requested).map_err(|err| err.to_string())?;
 
-        let installed_versions = find_installed_platform_tools()?;
+        let installed_versions = find_installed_platform_tools().map_err(|e| e.to_string())?;
         for v in installed_versions {
             if requested_semver
-                <= Version::parse(&semver_version(&v)).map_err(|err| err.to_string())?
+                <= Version::parse(&to_semver(&v)).map_err(|err| err.to_string())?
             {
-                return Ok(downloadable_version(tools_version));
+                return Ok(to_release_version(tools_version));
             }
         }
         let latest_version = get_latest_platform_tools_version()?;
-        let normalized_latest = semver_version(&latest_version);
+        let normalized_latest = to_semver(&latest_version);
 
         let latest_semver = Version::parse(&normalized_latest).map_err(|err| err.to_string())?;
         if requested_semver <= latest_semver {
-            Ok(downloadable_version(tools_version))
+            Ok(to_release_version(tools_version))
         } else {
             Err(format!(
                 "version `{tools_version}` appears to be newer than latest available version. \
@@ -398,44 +446,63 @@ impl CertoraSbfArgs {
         }
     }
 
+    /// This function ensures that the specified platform tools version is downloaded, unpacked,
+    /// and placed in the target path. If the `force_tools_install` flag is set, it will clean up
+    /// any existing installation before proceeding. Additionally, it creates a symbolic link
+    /// in the `platform-tools-sdk/sbf/dependencies` directory pointing to the installed tools.
+    ///
+    /// # Arguments
+    ///
+    /// * `download_file_name` - The name of the file to be downloaded.
+    /// * `platform_tools_version` - The version of the platform tools to be installed.
+    /// * `target_path` - The path where the platform tools should be installed.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the installation is successful.
+    /// * `Err(String)` if an error occurs during the installation process.
+    ///
+    /// # Errors
+    ///
+    /// This function may return an error if:
+    /// - The target path cannot be cleaned up or created.
+    /// - The platform tools cannot be downloaded or unpacked.
+    /// - A symbolic link cannot be created.
+    ///
+    /// # Behavior
+    ///
+    /// - If the `force_tools_install` flag is set, any existing installation at the target path
+    ///   or in the dependencies directory will be removed.
+    /// - If the target path is an empty directory, it will be removed before proceeding.
+    /// - If the platform tools are already installed and valid, no further action is taken.
+    /// - If the installation fails, the target path is cleaned up to recover from the failure.
     fn install_if_missing(
         &self,
         download_file_name: &str,
         platform_tools_version: &str,
         target_path: &Path,
-    ) -> Result<(), String> {
+    ) -> io::Result<()> {
         let sbf_sdk = self.sbf_sdk.as_ref().unwrap();
         if self.force_tools_install {
             // if forcing install, clean up first
             if target_path.is_dir() {
-                debug!("Removing directory: {:?}", target_path);
-                fs::remove_dir_all(target_path).map_err(|err| err.to_string())?
+                debug!("Removing directory: `{target_path:?}`");
+                fs::remove_dir_all(target_path)?;
             }
 
-            let source_base = sbf_sdk.join("dependencies");
-            if source_base.exists() {
-                let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
-                if source_path.exists() {
-                    debug!("Removing file {:?}", source_path);
-                    fs::remove_file(source_path).map_err(|err| err.to_string())?;
-                }
+            let source_path = sbf_sdk.join("dependencies").join(PLATFORM_TOOLS_PACKAGE);
+            if source_path.exists() {
+                debug!("Removing file `{source_path:?}`");
+                fs::remove_file(source_path)?;
             }
         }
 
         // Check whether the target path is an empty directory, and remove it.
-        if target_path.is_dir()
-            && target_path
-                .read_dir()
-                .map_err(|err| err.to_string())?
-                .next()
-                .is_none()
-        {
-            info!("Removing directory: {:?}", target_path);
-            fs::remove_dir(target_path).map_err(|err| err.to_string())?;
+        if target_path.is_dir() && is_empty_dir(target_path)? {
+            info!("Removing directory: {target_path:?}");
+            fs::remove_dir(target_path)?;
         }
 
-        // Check whether the package is already in ~/.cache/solana.
-        // Download it and place in the proper location if not found.
         if !target_path.is_dir()
             && !target_path
                 .symlink_metadata()
@@ -443,52 +510,39 @@ impl CertoraSbfArgs {
                 .unwrap_or(false)
         {
             if target_path.exists() {
-                info!("Removing file: {:?}", target_path);
-                fs::remove_file(target_path).map_err(|err| err.to_string())?;
+                info!("Removing file: `{target_path:?}`");
+                fs::remove_file(target_path)?;
             }
-            fs::create_dir_all(target_path).map_err(|err| err.to_string())?;
+            fs::create_dir_all(target_path)?;
 
             let url = format!(
                 "{PLATFORM_TOOLS_URL}/{platform_tools_version}-certora/{download_file_name}"
             );
             let download_file_path = target_path.join(download_file_name);
             if download_file_path.exists() {
-                fs::remove_file(&download_file_path).map_err(|err| err.to_string())?;
+                fs::remove_file(&download_file_path)?;
             }
             info!("downloading from: {url}");
-            download_file(url.as_str(), &download_file_path, true, &mut None)?;
-            let zip = File::open(&download_file_path).map_err(|err| err.to_string())?;
+            download_file(url.as_str(), &download_file_path, true, &mut None)
+                .map_err(io::Error::other)?;
+            let zip = File::open(&download_file_path)?;
             let tar = BzDecoder::new(BufReader::new(zip));
             let mut archive = Archive::new(tar);
-            info!("unpacking to: {:?}", target_path);
-            archive.unpack(target_path).map_err(|err| err.to_string())?;
-            fs::remove_file(download_file_path).map_err(|err| err.to_string())?;
+            info!("unpacking to: `{target_path:?}`");
+            archive.unpack(target_path)?;
+            fs::remove_file(download_file_path)?;
         }
 
         // Make a symbolic link source_path -> target_path in the
         // platform-tools-sdk/sbf/dependencies directory if no valid link found.
         let source_base = sbf_sdk.join("dependencies");
         if !source_base.exists() {
-            fs::create_dir_all(&source_base).map_err(|err| err.to_string())?;
+            fs::create_dir_all(&source_base)?;
         }
+
         let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
-
         // Check whether the correct symbolic link exists.
-        let invalid_link = if let Ok(link_target) = source_path.read_link() {
-            if link_target.ne(target_path) {
-                fs::remove_file(&source_path).map_err(|err| err.to_string())?;
-                true
-            } else {
-                false
-            }
-        } else {
-            true
-        };
-        if invalid_link {
-            std::os::unix::fs::symlink(target_path, source_path).map_err(|err| err.to_string())?;
-        }
-
-        Ok(())
+        create_or_update_symlink(target_path, &source_path)
     }
 
     fn install_platform_tools(&mut self, requested_version: Option<&str>) -> Result<(), String> {
