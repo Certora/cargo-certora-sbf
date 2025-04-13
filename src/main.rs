@@ -34,6 +34,19 @@ const PLATFORM_TOOLS_PACKAGE: &str = "platform-tools-certora";
 const PLATFORM_TOOLS_URL: &str =
     "https://github.com/Certora/certora-solana-platform-tools/releases/download";
 
+/// Default location of the root of all platform tools installations
+fn default_platform_tools_root() -> PathBuf {
+    home::home_dir()
+        .unwrap_or_default()
+        .join(".cache")
+        .join("solana")
+}
+
+/// Location of a specific platform tools version
+fn platform_tools_ver_root(root: &Path, ver: &str) -> PathBuf {
+    root.join(ver).join(PLATFORM_TOOLS_PACKAGE)
+}
+
 #[derive(Debug, Default)]
 struct RustFlags {
     flags: Vec<String>,
@@ -64,10 +77,10 @@ fn join_path(path: &Utf8Path, v: &Value) -> Value {
 /// # Errors
 /// Returns an error if any filesystem operations fail.
 fn create_or_update_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
-    if original.exists() {
-        let current_target = fs::read_link(original)?;
-        if current_target != link {
-            fs::remove_file(original)?; // Remove old symlink or file
+    if link.exists() {
+        let current_target = fs::read_link(link)?;
+        if current_target != original {
+            fs::remove_file(link)?; // Remove old symlink or file
             std::os::unix::fs::symlink(original, link)?;
         }
     } else {
@@ -288,14 +301,6 @@ fn to_semver(version: &str) -> String {
     }
 }
 
-fn make_platform_tools_path_for_version(package: &str, version: &str) -> Result<PathBuf, String> {
-    Ok(get_home_dir_path()?
-        .join(".cache")
-        .join("solana")
-        .join(version)
-        .join(package))
-}
-
 #[derive(Parser)] // requires `derive` feature
 #[command(name = "cargo")]
 #[command(bin_name = "cargo")]
@@ -351,6 +356,13 @@ struct CertoraSbfArgs {
     #[command(flatten)]
     verbose: clap_verbosity_flag::Verbosity,
 
+    #[arg(long,
+        env = "CERTORA_PLATFORM_TOOLS_ROOT",
+        help = "Location of platform tools installations",
+        value_name = "PATH",
+        default_value_os_t = default_platform_tools_root(),
+    )]
+    platform_tools_root: PathBuf,
     #[arg(
         long,
         env = "SBF_OUT_PATH",
@@ -369,6 +381,8 @@ struct CertoraSbfArgs {
     force_tools_install: bool,
     #[arg(long, help = "Do not attempt to install platform tools")]
     skip_tools_install: bool,
+    #[arg(long, help = "Do not attempt to build any packages")]
+    no_build: bool,
     #[arg(long, help = "Do not override rustup to point to platform tools")]
     no_rustup_override: bool,
     #[arg(long, help = "Generate shell script on failure for debugging")]
@@ -415,7 +429,7 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
 ///   configuring the build process and linking the toolchain.
 /// Installs the platform tools if they are missing or if a forced installation is requested.
 impl CertoraSbfArgs {
-    fn validate_platform_tools_version(&self, tools_version: &str) -> Result<String, String> {
+    fn check_platform_tools_version(&self, tools_version: &str) -> Result<String, String> {
         if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
             return Ok(DEFAULT_PLATFORM_TOOLS_VERSION.to_string());
         }
@@ -426,9 +440,7 @@ impl CertoraSbfArgs {
 
         let installed_versions = find_installed_platform_tools().map_err(|e| e.to_string())?;
         for v in installed_versions {
-            if requested_semver
-                <= Version::parse(&to_semver(&v)).map_err(|err| err.to_string())?
-            {
+            if requested_semver <= Version::parse(&to_semver(&v)).map_err(|err| err.to_string())? {
                 return Ok(to_release_version(tools_version));
             }
         }
@@ -444,6 +456,10 @@ impl CertoraSbfArgs {
             Latest available version is `{latest_version}`"
             ))
         }
+    }
+
+    fn platform_tools_path(&self, ver: &str) -> PathBuf {
+        platform_tools_ver_root(&self.platform_tools_root, ver)
     }
 
     /// This function ensures that the specified platform tools version is downloaded, unpacked,
@@ -530,6 +546,7 @@ impl CertoraSbfArgs {
             let mut archive = Archive::new(tar);
             info!("unpacking to: `{target_path:?}`");
             archive.unpack(target_path)?;
+            info!("removing: `{download_file_path:?}`");
             fs::remove_file(download_file_path)?;
         }
 
@@ -542,31 +559,30 @@ impl CertoraSbfArgs {
 
         let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
         // Check whether the correct symbolic link exists.
+        info!("symlink: {source_path:?} -> {target_path:?}");
         create_or_update_symlink(target_path, &source_path)
     }
 
-    fn install_platform_tools(&mut self, requested_version: Option<&str>) -> Result<(), String> {
-        if self.skip_tools_install {
-            return Ok(());
-        }
-
+    fn install_platform_tools(
+        &mut self,
+        requested_version: Option<&str>,
+    ) -> Result<PathBuf, String> {
         let arch = if cfg!(target_arch = "aarch64") {
             "aarch64"
         } else {
             "x86_64"
         };
 
-        let requested_version = requested_version.unwrap_or_else(|| &self.tools_version);
-        let requested_version = self.validate_platform_tools_version(requested_version)?;
+        let requested_version = requested_version.unwrap_or(&self.tools_version);
+        let requested_version = self.check_platform_tools_version(requested_version)?;
 
         let platform_tools_download_file_name = if cfg!(target_os = "macos") {
             format!("platform-tools-osx-{arch}.tar.bz2")
         } else {
             format!("platform-tools-linux-{arch}.tar.bz2")
         };
-        let package = PLATFORM_TOOLS_PACKAGE;
 
-        let target_path = make_platform_tools_path_for_version(package, &requested_version)?;
+        let target_path = self.platform_tools_path(&requested_version);
         if let Err(err) = self.install_if_missing(
             &platform_tools_download_file_name,
             &requested_version,
@@ -582,7 +598,7 @@ impl CertoraSbfArgs {
             }
             Err(format!("Failed to install platform-tools: {err}"))
         } else {
-            Ok(())
+            Ok(target_path)
         }
     }
 
@@ -618,18 +634,12 @@ impl CertoraSbfArgs {
         }
     }
 
-    fn rustup_link_toolchain(&self) -> Result<(), String> {
+    fn rustup_link_toolchain(&self, toolchain_path: &Path) -> Result<(), String> {
         if self.no_rustup_override {
             return Ok(());
         }
 
-        let toolchain_path = self
-            .sbf_sdk
-            .as_ref()
-            .unwrap()
-            .join("dependencies")
-            .join(PLATFORM_TOOLS_PACKAGE)
-            .join("rust");
+        let toolchain_path = toolchain_path.join("rust");
         let rustup = PathBuf::from("rustup");
         let rustup_args = vec!["toolchain", "list", "-v"];
         let rustup_output = spawn(&rustup, &rustup_args, self.generate_child_script_on_failure)?;
@@ -689,13 +699,17 @@ impl CertoraSbfArgs {
         if !self.skip_tools_install {
             let tools_version = self.tools_version.clone();
             info!("installing platform tools: {}", tools_version);
-            self.install_platform_tools(Some(&tools_version))?;
-            self.rustup_link_toolchain()?;
+            let tools_path = self.install_platform_tools(Some(&tools_version))?;
+            self.rustup_link_toolchain(&tools_path)?;
         }
 
-        // -- find solana package and compile it
-        let package = self.find_solana_package()?;
-        self.build_solana_package(&package)
+        if !self.no_build {
+            // -- find solana package and compile it
+            let package = self.find_solana_package()?;
+            self.build_solana_package(&package)
+        } else {
+            Ok(serde_json::Value::Null)
+        }
     }
 
     /// Returns reference to metadata
