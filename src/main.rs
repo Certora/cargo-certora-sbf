@@ -68,27 +68,6 @@ fn join_path(path: &Utf8Path, v: &Value) -> Value {
     }
 }
 
-/// Creates or updates a symbolic link.
-///
-/// # Arguments
-/// * `original` - The desired target of the symbolic link.
-/// * `link` - The path of the symbolic link.
-///
-/// # Errors
-/// Returns an error if any filesystem operations fail.
-fn create_or_update_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
-    if link.exists() {
-        let current_target = fs::read_link(link)?;
-        if current_target != original {
-            fs::remove_file(link)?; // Remove old symlink or file
-            std::os::unix::fs::symlink(original, link)?;
-        }
-    } else {
-        std::os::unix::fs::symlink(original, link)?;
-    }
-    Ok(())
-}
-
 /// Returns `true` if the directory exists and is empty, `false` if it exists and is not empty.
 /// Returns an error if the path does not exist or is not a directory.
 pub fn is_empty_dir(path: &Path) -> io::Result<bool> {
@@ -277,14 +256,6 @@ fn get_latest_platform_tools_version() -> Result<String, String> {
         .into())
 }
 
-fn to_release_version(version: &str) -> String {
-    if version.starts_with('v') {
-        version.to_string()
-    } else {
-        format!("v{version}")
-    }
-}
-
 fn to_semver(version: &str) -> String {
     let starts_with_v = version.starts_with('v');
     let dots = version.as_bytes().iter().fold(
@@ -369,8 +340,6 @@ struct CertoraSbfArgs {
         help = "Output directory for build artifacts"
     )]
     sbf_out_dir: Option<PathBuf>,
-    #[arg(long, env = "SBF_SDK_PATH", help = "Path to Solana SDK")]
-    sbf_sdk: Option<PathBuf>,
     #[arg(long, help = "Additional arguments to pass to cargo")]
     cargo_args: Option<Vec<String>>,
     #[arg(long)]
@@ -379,12 +348,12 @@ struct CertoraSbfArgs {
     debug: bool,
     #[arg(long, help = "Force fresh install of platform tools")]
     force_tools_install: bool,
-    #[arg(long, help = "Do not attempt to install platform tools")]
-    skip_tools_install: bool,
+    #[arg(long, help = "Do not install platform tools")]
+    no_tools_install: bool,
     #[arg(long, help = "Do not attempt to build any packages")]
     no_build: bool,
-    #[arg(long, help = "Do not override rustup to point to platform tools")]
-    no_rustup_override: bool,
+    #[arg(long, help = "Do not create rustup entry for platform tools")]
+    no_rustup: bool,
     #[arg(long, help = "Generate shell script on failure for debugging")]
     generate_child_script_on_failure: bool,
     #[arg(
@@ -429,27 +398,29 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
 ///   configuring the build process and linking the toolchain.
 /// Installs the platform tools if they are missing or if a forced installation is requested.
 impl CertoraSbfArgs {
-    fn check_platform_tools_version(&self, tools_version: &str) -> Result<String, String> {
+    fn check_platform_tools_version(&self, tools_version: &str) -> Result<(), String> {
+        // -- quick check of known good version
         if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
-            return Ok(DEFAULT_PLATFORM_TOOLS_VERSION.to_string());
+            return Ok(());
         }
 
+        // -- check if requested matches available
         let normalized_requested = to_semver(tools_version);
         let requested_semver =
             Version::parse(&normalized_requested).map_err(|err| err.to_string())?;
 
         let installed_versions = find_installed_platform_tools().map_err(|e| e.to_string())?;
-        for v in installed_versions {
-            if requested_semver <= Version::parse(&to_semver(&v)).map_err(|err| err.to_string())? {
-                return Ok(to_release_version(tools_version));
-            }
+        if installed_versions.iter().any(|v| v == tools_version) {
+            return Ok(());
         }
+
+        // -- sanity check -- at least requested is not newer than what is available online
         let latest_version = get_latest_platform_tools_version()?;
         let normalized_latest = to_semver(&latest_version);
 
         let latest_semver = Version::parse(&normalized_latest).map_err(|err| err.to_string())?;
         if requested_semver <= latest_semver {
-            Ok(to_release_version(tools_version))
+            Ok(())
         } else {
             Err(format!(
                 "version `{tools_version}` appears to be newer than latest available version. \
@@ -498,18 +469,11 @@ impl CertoraSbfArgs {
         platform_tools_version: &str,
         target_path: &Path,
     ) -> io::Result<()> {
-        let sbf_sdk = self.sbf_sdk.as_ref().unwrap();
         if self.force_tools_install {
             // if forcing install, clean up first
             if target_path.is_dir() {
                 debug!("Removing directory: `{target_path:?}`");
                 fs::remove_dir_all(target_path)?;
-            }
-
-            let source_path = sbf_sdk.join("dependencies").join(PLATFORM_TOOLS_PACKAGE);
-            if source_path.exists() {
-                debug!("Removing file `{source_path:?}`");
-                fs::remove_file(source_path)?;
             }
         }
 
@@ -549,24 +513,10 @@ impl CertoraSbfArgs {
             info!("removing: `{download_file_path:?}`");
             fs::remove_file(download_file_path)?;
         }
-
-        // Make a symbolic link source_path -> target_path in the
-        // platform-tools-sdk/sbf/dependencies directory if no valid link found.
-        let source_base = sbf_sdk.join("dependencies");
-        if !source_base.exists() {
-            fs::create_dir_all(&source_base)?;
-        }
-
-        let source_path = source_base.join(PLATFORM_TOOLS_PACKAGE);
-        // Check whether the correct symbolic link exists.
-        info!("symlink: {source_path:?} -> {target_path:?}");
-        create_or_update_symlink(target_path, &source_path)
+        Ok(())
     }
 
-    fn install_platform_tools(
-        &mut self,
-        requested_version: Option<&str>,
-    ) -> Result<PathBuf, String> {
+    fn install_platform_tools(&self, requested_version: Option<&str>) -> Result<PathBuf, String> {
         let arch = if cfg!(target_arch = "aarch64") {
             "aarch64"
         } else {
@@ -574,7 +524,7 @@ impl CertoraSbfArgs {
         };
 
         let requested_version = requested_version.unwrap_or(&self.tools_version);
-        let requested_version = self.check_platform_tools_version(requested_version)?;
+        self.check_platform_tools_version(requested_version)?;
 
         let platform_tools_download_file_name = if cfg!(target_os = "macos") {
             format!("platform-tools-osx-{arch}.tar.bz2")
@@ -602,40 +552,8 @@ impl CertoraSbfArgs {
         }
     }
 
-    fn check_sbf_sdk_path(&mut self) -> Result<(), String> {
-        if self.sbf_sdk.is_some() {
-            return Ok(());
-        }
-
-        let solana_exe = which::which("solana")
-            .map_err(|err| format!("`solana` cli not found on the path: {err}"))?;
-
-        let solana_exe_parent = solana_exe
-            .parent()
-            .ok_or_else(|| format!("could not find parent directory of {:?}", solana_exe))?
-            .to_path_buf();
-
-        let sbf_sdk1 = solana_exe_parent.join("sdk").join("sbf");
-
-        let sbf_sdk2 = solana_exe_parent.join("platform-tools-sdk").join("sbf");
-
-        self.sbf_sdk = if sbf_sdk1.is_dir() {
-            Some(sbf_sdk1)
-        } else if sbf_sdk2.is_dir() {
-            Some(sbf_sdk2)
-        } else {
-            None
-        };
-
-        if self.sbf_sdk.is_none() {
-            Err("could not locate SBF_SDK. Make sure solana cli is installed and properly configured.".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
     fn rustup_link_toolchain(&self, toolchain_path: &Path) -> Result<(), String> {
-        if self.no_rustup_override {
+        if self.no_rustup {
             return Ok(());
         }
 
@@ -692,21 +610,19 @@ impl CertoraSbfArgs {
         Ok(())
     }
 
-    pub fn exec(&mut self) -> Result<Value, String> {
-        self.check_sbf_sdk_path()?;
-
+    pub fn exec(&self) -> Result<Value, String> {
         // -- install platform tools if needed (or forced)
-        if !self.skip_tools_install {
-            let tools_version = self.tools_version.clone();
-            info!("installing platform tools: {}", tools_version);
-            let tools_path = self.install_platform_tools(Some(&tools_version))?;
+        if !self.no_tools_install {
+            let tools_version = &self.tools_version;
+            info!("installing platform tools: {tools_version}");
+            let tools_path = self.install_platform_tools(Some(tools_version))?;
             self.rustup_link_toolchain(&tools_path)?;
         }
 
         if !self.no_build {
             // -- find solana package and compile it
             let package = self.find_solana_package()?;
-            self.build_solana_package(&package)
+            self.build_solana_package(&package, &self.tools_version)
         } else {
             Ok(serde_json::Value::Null)
         }
@@ -768,7 +684,17 @@ impl CertoraSbfArgs {
         }
     }
 
-    fn build_solana_package(&self, package: &Package) -> Result<Value, String> {
+    /// Build a package using specific tools version
+    ///
+    /// # Arguments
+    ///
+    ///  * `package` -- Solana cdylib package to build
+    ///  * `tools_version` -- Version of platform tools to use
+    fn build_solana_package(
+        &self,
+        package: &Package,
+        tools_version: &str,
+    ) -> Result<Value, String> {
         let package_dir = package.manifest_path.parent().ok_or_else(|| {
             format!(
                 "unexpected missing parent directory of {}",
@@ -786,14 +712,8 @@ impl CertoraSbfArgs {
 
         let target_triple = self.arch.to_string();
 
-        let llvm_bin = self
-            .sbf_sdk
-            .as_ref()
-            .unwrap()
-            .join("dependencies")
-            .join(PLATFORM_TOOLS_PACKAGE)
-            .join("llvm")
-            .join("bin");
+        let platform_tools_path = self.platform_tools_path(tools_version);
+        let llvm_bin = platform_tools_path.join("llvm").join("bin");
         env::set_var("CC", llvm_bin.join("clang"));
         env::set_var("AR", llvm_bin.join("llvm-ar"));
         env::set_var("OBJDUMP", llvm_bin.join("llvm-objdump"));
@@ -843,7 +763,14 @@ impl CertoraSbfArgs {
 
         let cargo_build = PathBuf::from("cargo");
         let mut cargo_build_args: Vec<&str> = vec![];
-        if !self.no_rustup_override {
+
+        // always create for ownership reasons
+        let rustc_path = platform_tools_path.join("rust").join("bin").join("rustc");
+        let build_rustc = format!("build.rustc={rustc_path:?}");
+        if self.no_rustup {
+            cargo_build_args.push("--config");
+            cargo_build_args.push(&build_rustc);
+        } else {
             cargo_build_args.push("+certora-solana");
         };
 
@@ -852,13 +779,13 @@ impl CertoraSbfArgs {
         cargo_build_args.push("--target");
         cargo_build_args.push(&target_triple);
 
-        cargo_build_args.push("--features=certora".into());
+        cargo_build_args.push("--features=certora");
 
         if self.features.no_default_features {
-            cargo_build_args.push("--no-default-features".into());
+            cargo_build_args.push("--no-default-features");
         }
         for feature in &self.features.features {
-            cargo_build_args.push("--features".into());
+            cargo_build_args.push("--features");
             cargo_build_args.push(feature);
         }
         if self.verbose.filter() == VerbosityFilter::Debug {
@@ -880,8 +807,6 @@ impl CertoraSbfArgs {
             &cargo_build_args,
             self.generate_child_script_on_failure,
         )?;
-
-        info!("{:?} {}", cargo_build, cargo_build_args.join(" "));
         info!("{}", output);
 
         let name = target.name.replace('-', "_");
@@ -958,7 +883,7 @@ fn main() {
     //     }
     // }
 
-    let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::from_arg_matches(&matches)
+    let CertoraSbfCargoCli::CertoraSbf(args) = CertoraSbfCargoCli::from_arg_matches(&matches)
         .unwrap_or_else(|e| {
             e.exit();
         });
