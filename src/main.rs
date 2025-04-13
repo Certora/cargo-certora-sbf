@@ -156,7 +156,7 @@ where
         .iter()
         .map(|arg| arg.as_ref().to_str().unwrap_or("?"))
         .join(" ");
-    info!("spawn: {:?} {}", program, msg);
+    info!("spawn: {} {msg}", program.to_string_lossy());
 
     let child = Command::new(program)
         .args(args)
@@ -398,6 +398,20 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
 ///   configuring the build process and linking the toolchain.
 /// Installs the platform tools if they are missing or if a forced installation is requested.
 impl CertoraSbfArgs {
+    fn get_rustc_path(&self, ver: &str) -> PathBuf {
+        self.platform_tools_path(ver)
+            .join("rust")
+            .join("bin")
+            .join("rustc")
+    }
+
+    fn get_cargo_path(&self, ver: &str) -> PathBuf {
+        self.platform_tools_path(ver)
+            .join("rust")
+            .join("bin")
+            .join("cargo")
+    }
+
     fn check_platform_tools_version(&self, tools_version: &str) -> Result<(), String> {
         // -- quick check of known good version
         if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
@@ -621,7 +635,7 @@ impl CertoraSbfArgs {
 
         if !self.no_build {
             // -- find solana package and compile it
-            let package = self.find_solana_package()?;
+            let package = self.find_solana_package(&self.tools_version)?;
             self.build_solana_package(&package, &self.tools_version)
         } else {
             Ok(serde_json::Value::Null)
@@ -631,16 +645,20 @@ impl CertoraSbfArgs {
     /// Returns reference to metadata
     ///
     /// Metadata is computed if necessary
-    fn get_metadata_ref<'a>(&'a self) -> Result<&'a RefCell<Option<Metadata>>, String> {
+    fn get_metadata_ref<'a>(&'a self, ver: &str) -> Result<&'a RefCell<Option<Metadata>>, String> {
         let mut metadata = self.metadata.borrow_mut();
         if metadata.is_none() {
             let mut metadata_command = MetadataCommand::new();
+            metadata_command
+                .cargo_path(self.get_cargo_path(ver))
+                .env("RUSTC", self.get_rustc_path(ver));
 
             // -- forward manifest path
             if let Some(ref path) = self.manifest.manifest_path {
                 metadata_command.manifest_path(path);
             }
 
+            info!("{metadata_command:?}");
             // -- compute and cache metadata
             *metadata = Some(metadata_command.exec().map_err(|err| err.to_string())?);
         }
@@ -650,8 +668,13 @@ impl CertoraSbfArgs {
         Ok(&self.metadata)
     }
 
-    fn find_solana_package<'a>(&'a self) -> Result<Package, String> {
-        let metadata_ref = self.get_metadata_ref()?.borrow();
+    /// Find the first solana package to compile
+    ///
+    /// # Arguments
+    ///
+    /// `ver` -- the version of platform-tools to use
+    fn find_solana_package<'a>(&'a self, ver: &str) -> Result<Package, String> {
+        let metadata_ref = self.get_metadata_ref(ver)?.borrow();
         let metadata = metadata_ref.as_ref().unwrap();
 
         // -- if there is a root package, stick with it
@@ -761,12 +784,17 @@ impl CertoraSbfArgs {
             env::var(&cargo_target_rustflags).ok().unwrap_or_default(),
         );
 
-        let cargo_build = PathBuf::from("cargo");
+        let cargo_build = if self.no_rustup {
+            self.get_cargo_path(tools_version)
+        } else {
+            PathBuf::from("cargo")
+        };
+
         let mut cargo_build_args: Vec<&str> = vec![];
 
         // always create for ownership reasons
-        let rustc_path = platform_tools_path.join("rust").join("bin").join("rustc");
-        let build_rustc = format!("build.rustc={rustc_path:?}");
+        let rustc_path = self.get_rustc_path(tools_version);
+        let build_rustc = format!("build.rustc=\"{}\"", rustc_path.to_string_lossy());
         if self.no_rustup {
             cargo_build_args.push("--config");
             cargo_build_args.push(&build_rustc);
