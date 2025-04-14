@@ -15,9 +15,9 @@ use {
         cell::RefCell,
         env,
         ffi::OsStr,
+        fmt::Display,
         fs::{self, File},
-        io,
-        io::{prelude::*, BufReader, BufWriter},
+        io::{self, prelude::*, BufReader, BufWriter},
         path::{Path, PathBuf},
         process::{exit, Command, Stdio},
     },
@@ -91,7 +91,7 @@ impl RustFlags {
     where
         I: IntoIterator<Item = String>,
     {
-        self.flags.extend(iter.into_iter())
+        self.flags.extend(iter)
     }
 
     pub fn add_flag(&mut self, flag: &str) {
@@ -133,12 +133,14 @@ impl RustFlags {
         self.flags.push(format!("-C {}={}", arg, val));
     }
 
-    pub fn to_string(&self) -> String {
-        self.flags.join(" ")
-    }
-
     pub fn is_empty(&self) -> bool {
         self.flags.is_empty()
+    }
+}
+
+impl Display for RustFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.flags.iter().format(" ").fmt(f)
     }
 }
 
@@ -396,7 +398,6 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
 ///   using this implementation.
 /// - The implementation relies on specific environment variables and paths for
 ///   configuring the build process and linking the toolchain.
-/// Installs the platform tools if they are missing or if a forced installation is requested.
 impl CertoraSbfArgs {
     fn get_rustc_path(&self, ver: &str) -> PathBuf {
         self.platform_tools_path(ver)
@@ -546,10 +547,10 @@ impl CertoraSbfArgs {
             format!("platform-tools-linux-{arch}.tar.bz2")
         };
 
-        let target_path = self.platform_tools_path(&requested_version);
+        let target_path = self.platform_tools_path(requested_version);
         if let Err(err) = self.install_if_missing(
             &platform_tools_download_file_name,
-            &requested_version,
+            requested_version,
             &target_path,
         ) {
             if target_path.exists() {
@@ -673,7 +674,7 @@ impl CertoraSbfArgs {
     /// # Arguments
     ///
     /// `ver` -- the version of platform-tools to use
-    fn find_solana_package<'a>(&'a self, ver: &str) -> Result<Package, String> {
+    fn find_solana_package(&self, ver: &str) -> Result<Package, String> {
         let metadata_ref = self.get_metadata_ref(ver)?.borrow();
         let metadata = metadata_ref.as_ref().unwrap();
 
@@ -776,7 +777,7 @@ impl CertoraSbfArgs {
         }
 
         if !rust_flags.is_empty() {
-            env::set_var(&cargo_target_rustflags, &rust_flags.to_string());
+            env::set_var(&cargo_target_rustflags, rust_flags.to_string());
         }
         info!(
             "{}=\"{}\"",
@@ -857,8 +858,7 @@ impl CertoraSbfArgs {
         let sources = package
             .metadata
             .get(CERTORA_META_KEY)
-            .and_then(|x| x.get(SOURCES_META_KEY))
-            .map(|x| x.clone())
+            .and_then(|x| x.get(SOURCES_META_KEY).cloned())
             .unwrap_or_else(|| json!([]));
 
         let mut sources = join_path(rel_package_root, &sources);

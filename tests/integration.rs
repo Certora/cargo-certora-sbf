@@ -52,7 +52,10 @@ certora = []
     let mut cmd = Command::cargo_bin("cargo-certora-sbf").unwrap();
     let cmd_path = PathBuf::from(cmd.get_program());
     let tools_root_path = cmd_path.parent().unwrap().join("certora-tools-root");
-    let platform_tools_root_arg = format!("--platform-tools-root={}", tools_root_path.to_string_lossy());
+    let platform_tools_root_arg = format!(
+        "--platform-tools-root={}",
+        tools_root_path.to_string_lossy()
+    );
     cmd.arg("certora-sbf")
         .arg("--no-rustup")
         .arg("-vv")
