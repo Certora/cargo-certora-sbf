@@ -336,12 +336,6 @@ struct CertoraSbfArgs {
         default_value_os_t = default_platform_tools_root(),
     )]
     platform_tools_root: PathBuf,
-    #[arg(
-        long,
-        env = "SBF_OUT_PATH",
-        help = "Output directory for build artifacts"
-    )]
-    sbf_out_dir: Option<PathBuf>,
     #[arg(long, help = "Additional arguments to pass to cargo")]
     cargo_args: Option<Vec<String>>,
     #[arg(long)]
