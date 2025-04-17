@@ -8,9 +8,9 @@ A Cargo subcommand that integrates [Certora](https://www.certora.com/) formal ve
 
 1. [rustup](https://rustup.rs/) installer for Rust
 2. Rust version >= 1.81 to compile `cargo-certora-sbf` itself
-3. [Solana CLI](https://solana.com/docs/intro/installation) version >= 1.18
+3. (optional) [Solana CLI](https://solana.com/docs/intro/installation) version >= 1.18
 3. (optional) Rust version v1.75. This version corresponds to Rust bundled with Solana v1.18. 
-4. (optional) Rust version v1.79. This version corresponds to Rust bundled with Solana v2
+4. (optional) Rust version v1.79. This version corresponds to Rust bundled with Solana v2.1
 
 ### Instructions ###
 
@@ -32,7 +32,7 @@ cargo certora-sbf [OPTIONS]
 
 ## 🔧 Options
 
-Run cargo certora-sbf --help for the full list of options.
+Run `cargo certora-sbf --help` for the full list of options.
 
 ## 🛠 How It Works
 
@@ -73,7 +73,17 @@ Run cargo certora-sbf --help for the full list of options.
     [ERROR] execution of "rustup" terminated with exit status: 1
     ```
 
-    try reinstalling via `cargo certora-sbf --force-tools-install`.
+    try reinstalling via `cargo certora-sbf --no-build --force-tools-install`.
+4. Is it possible to install platform tools without building a rust project.
+
+   Yes. Use the following command line flags:
+   ```sh
+   cargo certora-sbf --no-build --force-tools-install
+   ```
+5. Something is not working, how to get more information on what is going on?
+    
+    Enable extra verbosity by using `-vv` flag.
+    
 ## 📄 License
 
 Apache 2.0. See LICENSE for details.
