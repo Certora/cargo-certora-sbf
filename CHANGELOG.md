@@ -7,8 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- next-header -->
-  
+
 ## [Unreleased] - ReleaseDate
+  
+## [0.3.0] - 2025-04-17
 
 ### Added
   - improved error messages
@@ -31,5 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 <!-- next-url -->
-[unreleased]: https://github.com/Certora/cvlr/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/assert-rs/predicates-rs/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/Certora/cvlr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Certora/cvlr/releases/tag/v0.2.0

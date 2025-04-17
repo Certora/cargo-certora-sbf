@@ -1,6 +1,6 @@
 [package]
 name = "cargo-certora-sbf"
-version = "0.2.0"
+version = "0.3.0"
 authors = [ "Arie Gurfinkel <arie@certora.com>" ]
 description = "Build a program for Certora Verification using Certora's version of Solana Platform Tools"
 documentation = "https://docs.rs/cvlr/latest"
