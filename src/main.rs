@@ -217,29 +217,26 @@ where
     }
 } */
 
-fn get_home_dir_path() -> Result<PathBuf, String> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "missing HOME environment variable".to_string())
-}
-
-fn find_installed_platform_tools() -> io::Result<Vec<String>> {
-    let solana_cache_dir = get_home_dir_path()
-        .map_err(io::Error::other)?
-        .join(".cache")
-        .join("solana");
-    let package = PLATFORM_TOOLS_PACKAGE;
-
-    Ok(std::fs::read_dir(solana_cache_dir)?
+fn find_installed_platform_tools_unchecked(pft_root: &Path) -> io::Result<Vec<String>> {
+    let tools = std::fs::read_dir(pft_root)?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
-            if path.is_dir() && path.join(package).is_dir() {
-                Some(path.to_string_lossy().to_string())
+            if path.is_dir() && path.join(PLATFORM_TOOLS_PACKAGE).is_dir() {
+                path.file_name().map(|n| n.to_string_lossy().to_string())
             } else {
                 None
             }
         })
-        .collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+
+    Ok(tools)
+}
+
+fn find_installed_platform_tools(pft_root: &Path) -> Vec<String> {
+    debug!("Looking for available platform tools in {pft_root:?} ...");
+    let tools = find_installed_platform_tools_unchecked(pft_root).unwrap_or_else(|_| vec![]);
+    debug!("Found: {}", tools.join(", "));
+    tools
 }
 
 fn get_latest_platform_tools_version() -> Result<String, String> {
@@ -408,6 +405,7 @@ impl CertoraSbfArgs {
     }
 
     fn check_platform_tools_version(&self, tools_version: &str) -> Result<(), String> {
+        debug!("validating platform tools version: `{tools_version}`");
         // -- quick check of known good version
         if tools_version == DEFAULT_PLATFORM_TOOLS_VERSION {
             return Ok(());
@@ -418,7 +416,9 @@ impl CertoraSbfArgs {
         let requested_semver =
             Version::parse(&normalized_requested).map_err(|err| err.to_string())?;
 
-        let installed_versions = find_installed_platform_tools().map_err(|e| e.to_string())?;
+        debug!("requested semver is `{requested_semver}`");
+
+        let installed_versions = find_installed_platform_tools(&self.platform_tools_root);
         if installed_versions.iter().any(|v| v == tools_version) {
             return Ok(());
         }
