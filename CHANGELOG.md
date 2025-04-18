@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 
 ## [Unreleased] - ReleaseDate
+
+## [0.3.1] - 2025-04-18
  ### Changed
   - fix handling of platform-tools-root for non-default version of tools
   
@@ -35,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/assert-rs/predicates-rs/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/assert-rs/predicates-rs/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/assert-rs/predicates-rs/compare/v0.3.0...v0.3.1
 [unreleased]: https://github.com/Certora/cvlr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Certora/cvlr/releases/tag/v0.2.0
