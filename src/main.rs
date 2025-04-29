@@ -204,19 +204,6 @@ where
         .collect::<String>())
 }
 
-/* fn is_version_string(arg: &str) -> Result<(), String> {
-    let ver = if arg.matches('.').count() == 1 {
-        arg.to_string() + ".0"
-    } else {
-        arg.to_string()
-    };
-    if ver.starts_with('v') && Version::parse(&ver[1..]).is_ok() {
-        Ok(())
-    } else {
-        Err("a version string may start with 'v' and contains major and minor version numbers separated by a dot, e.g. v1.32 or 1.32".to_string())
-    }
-} */
-
 fn find_installed_platform_tools_unchecked(pft_root: &Path) -> io::Result<Vec<String>> {
     let tools = std::fs::read_dir(pft_root)?
         .filter_map(|entry| {
@@ -895,20 +882,10 @@ fn main() {
     let cmd = CertoraSbfCargoCli::command();
     let matches = cmd.get_matches();
 
-    // if let Some((_name, matches)) = matches.subcommand() {
-    //     use clap::parser::ValueSource;
-    //     if matches.value_source(&"tools_version") == Some(ValueSource::DefaultValue) {
-    //         println!("source for tools version is default");
-    //     } else {
-    //         println!("tools version is explicitly requested");
-    //     }
-    // }
-
     let CertoraSbfCargoCli::CertoraSbf(args) = CertoraSbfCargoCli::from_arg_matches(&matches)
         .unwrap_or_else(|e| {
             e.exit();
         });
-    // let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::parse();
 
     // setup log level
     env_logger::builder()
