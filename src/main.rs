@@ -335,8 +335,6 @@ struct CertoraSbfArgs {
     platform_tools_root: PathBuf,
     #[arg(long, help = "Additional arguments to pass to cargo")]
     cargo_args: Option<Vec<String>>,
-    #[arg(long)]
-    remap_cwd: bool,
     #[arg(long, help = "Enable debug information in compiled binary")]
     debug: bool,
     #[arg(long, help = "Force fresh install of platform tools")]
@@ -747,9 +745,10 @@ impl CertoraSbfArgs {
         rust_flags.add_from_env("RUSTFLAGS");
         rust_flags.add_from_env(&cargo_target_rustflags);
 
-        if self.remap_cwd && !self.debug {
-            rust_flags.add_flag("-Zremap-cwd-prefix=");
-        }
+        // Adds the -Zremap-cwd-prefix flag to disable remapping of the current
+        // working directory's prefix, ensuring paths remain unchanged or
+        // relative during compilation.
+        rust_flags.add_flag("-Zremap-cwd-prefix=");
 
         if self.debug {
             // Replace with -Zsplit-debuginfo=packed when stabilized.

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+  - `-Zremap-cwd-prefix` flag is always used to compile projects
+
+### Removed
+  - remove command line flag `remap_cwd`
+
 ## [0.3.1] - 2025-04-18
  ### Changed
   - fix handling of platform-tools-root for non-default version of tools
