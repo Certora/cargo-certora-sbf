@@ -204,18 +204,45 @@ where
         .collect::<String>())
 }
 
-/* fn is_version_string(arg: &str) -> Result<(), String> {
-    let ver = if arg.matches('.').count() == 1 {
-        arg.to_string() + ".0"
-    } else {
-        arg.to_string()
-    };
-    if ver.starts_with('v') && Version::parse(&ver[1..]).is_ok() {
-        Ok(())
-    } else {
-        Err("a version string may start with 'v' and contains major and minor version numbers separated by a dot, e.g. v1.32 or 1.32".to_string())
+/// Validates that a version string is in the format `v<major>.<minor>`, e.g., `v1.41`.
+///
+/// # Returns
+///
+/// * `Ok(String)` containing the original version string if it is valid.
+/// * `Err(String)` with an error message if the version string:
+///   - Does not start with a `v`
+///   - Does not contain exactly one dot
+///   - Has non-numeric major or minor components
+///
+/// # Examples
+///
+/// ```
+/// assert!(is_valid_tools_version_string("v1.41").is_ok());
+/// assert!(is_valid_tools_version_string("1.41").is_err());
+/// assert!(is_valid_tools_version_string("v1.41.0").is_err());
+/// assert!(is_valid_tools_version_string("v1.x").is_err());
+/// ```
+fn is_valid_tools_version_string(arg: &str) -> Result<String, String> {
+    if !arg.starts_with('v') {
+        return Err("Version must be in format v<major>.<minor>".to_string());
     }
-} */
+
+    let version_str = arg.strip_prefix('v').unwrap_or(arg);
+
+    let parts: Vec<&str> = version_str.split('.').collect();
+    if parts.len() != 2 {
+        return Err("Version must be in format v<major>.<minor>".to_string());
+    }
+
+    parts[0]
+        .parse::<u64>()
+        .map_err(|_| "Major version must be a number")?;
+    parts[1]
+        .parse::<u64>()
+        .map_err(|_| "Minor version must be a number")?;
+
+    Ok(arg.to_string())
+}
 
 fn find_installed_platform_tools_unchecked(pft_root: &Path) -> io::Result<Vec<String>> {
     let tools = std::fs::read_dir(pft_root)?
@@ -352,7 +379,8 @@ struct CertoraSbfArgs {
         default_value_t = DEFAULT_PLATFORM_TOOLS_VERSION.to_string(),
         id = "tools_version",
         value_name = "VERSION",
-        help = "Platform tools version to use")]
+        help = "Platform tools version to use",
+        value_parser = is_valid_tools_version_string)]
     tools_version: String,
     #[arg(long, short, help = "Number of parallel jobs")]
     jobs: Option<usize>,
@@ -908,7 +936,6 @@ fn main() {
         .unwrap_or_else(|e| {
             e.exit();
         });
-    // let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::parse();
 
     // setup log level
     env_logger::builder()
