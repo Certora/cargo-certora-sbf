@@ -430,6 +430,13 @@ impl CertoraSbfArgs {
             .join("cargo")
     }
 
+    /// Check if cargo was invoked with --offline flag
+    fn is_offline(&self) -> bool {
+        env::var("CARGO_NET_OFFLINE")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+    }
+
     fn check_platform_tools_version(&self, tools_version: &str) -> Result<(), String> {
         debug!("validating platform tools version: `{tools_version}`");
         // -- quick check of known good version
@@ -446,6 +453,12 @@ impl CertoraSbfArgs {
 
         let installed_versions = find_installed_platform_tools(&self.platform_tools_root);
         if installed_versions.iter().any(|v| v == tools_version) {
+            return Ok(());
+        }
+
+        // -- if offline, skip online version check
+        if self.is_offline() {
+            debug!("offline mode: skipping online version check for `{tools_version}`");
             return Ok(());
         }
 
@@ -524,6 +537,15 @@ impl CertoraSbfArgs {
                 .map(|metadata| metadata.file_type().is_symlink())
                 .unwrap_or(false)
         {
+            // -- check if offline mode is enabled
+            if self.is_offline() {
+                return Err(io::Error::other(format!(
+                    "platform tools version `{platform_tools_version}` is not installed and \
+                    cannot be downloaded in offline mode. Please install it first or run \
+                    without the --offline flag."
+                )));
+            }
+
             if target_path.exists() {
                 info!("Removing file: `{target_path:?}`");
                 fs::remove_file(target_path)?;
@@ -883,6 +905,14 @@ impl CertoraSbfArgs {
             .unwrap_or_else(|| json!([]));
 
         let mut sources = join_path(rel_package_root, &sources);
+
+        if !sources.is_array() {
+            return Err(format!(
+                "Value for `sources` of `package.metadata.certora` \
+                    in {} must be an array. Current value is: {sources}.",
+                package.manifest_path
+            ));
+        }
 
         // add Cargo.toml from the workspace root
         sources.as_array_mut().unwrap().push("Cargo.toml".into());
