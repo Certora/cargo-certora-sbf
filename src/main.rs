@@ -773,10 +773,21 @@ impl CertoraSbfArgs {
         rust_flags.add_from_env("RUSTFLAGS");
         rust_flags.add_from_env(&cargo_target_rustflags);
 
-        // Adds the -Zremap-cwd-prefix flag to disable remapping of the current
-        // working directory's prefix, ensuring paths remain unchanged or
-        // relative during compilation.
-        rust_flags.add_flag("-Zremap-cwd-prefix=");
+        // Remap paths for reproducible builds and for the VSCode extension debugger
+        // Note, the path for the certora-solana-platforms tools (/Users/runner/work/certora-solana-platform-tools/) won't be stripped.
+        if let Ok(cargo_home) = env::var("CARGO_HOME") {
+            // The VSCode debugger relies on the prefix /CARGO_HOME/ It will be replaced
+            // by the user's local $CARGO_HOME environment variable in the debugger itself.
+            rust_flags.add_flag(&format!("--remap-path-prefix {}=/CARGO_HOME/", cargo_home));
+        } else {
+            info!("Environment variable CARGO_HOME is not set. Debug information contains absolute path local to this machine.");
+        }
+
+        if let Ok(workspace_root) = get_workspace_root() {
+            // All .rs files in the build that are in the current working directory
+            // receive relative paths in debug information / user paths are removed.
+            rust_flags.add_flag(&format!("--remap-path-prefix {}=", workspace_root));
+        }
 
         if self.debug {
             // Replace with -Zsplit-debuginfo=packed when stabilized.
@@ -967,4 +978,26 @@ fn main() {
             exit(1);
         }
     }
+}
+
+/// Returns the path to the workspace_root as given by the command `cargo metadata``
+fn get_workspace_root() -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let workspace_root = json["workspace_root"]
+        .as_str()
+        .ok_or("workspace_root not found in cargo metadata")?;
+
+    Ok(workspace_root.to_string())
 }
