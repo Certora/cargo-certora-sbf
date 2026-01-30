@@ -795,10 +795,27 @@ impl CertoraSbfArgs {
         rust_flags.add_from_env("RUSTFLAGS");
         rust_flags.add_from_env(&cargo_target_rustflags);
 
-        // Adds the -Zremap-cwd-prefix flag to disable remapping of the current
-        // working directory's prefix, ensuring paths remain unchanged or
-        // relative during compilation.
-        rust_flags.add_flag("-Zremap-cwd-prefix=");
+        // Remap paths for reproducible builds and for the VSCode extension debugger
+        // Note, the path for the certora-solana-platforms tools (/Users/runner/work/certora-solana-platform-tools/) won't be stripped.
+        let cargo_home = home::cargo_home();
+
+        if let Ok(cargo_home) = cargo_home {
+            // The VSCode debugger relies on the prefix /CARGO_HOME/ It will be replaced
+            // by the user's local $CARGO_HOME environment variable in the debugger itself.
+            rust_flags.add_flag(&format!(
+                "--remap-path-prefix {}=/CARGO_HOME/",
+                cargo_home.display()
+            ));
+        } else {
+            info!("Could not locate CARGO_HOME. Debug information contains absolute path local to the current machine.");
+        }
+
+        let metadata_ref = self.get_metadata_ref(&self.tools_version)?.borrow();
+        if let Some(metadata) = metadata_ref.as_ref() {
+            // All .rs files in the build that are in the current working directory
+            // receive relative paths, i.e. all build environment / user specific information is removed.
+            rust_flags.add_flag(&format!("--remap-path-prefix {}=", metadata.workspace_root));
+        }
 
         if self.debug {
             // Replace with -Zsplit-debuginfo=packed when stabilized.
