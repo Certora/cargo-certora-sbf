@@ -775,10 +775,10 @@ impl CertoraSbfArgs {
 
         // Remap paths for reproducible builds and for the VSCode extension debugger
         // Note, the path for the certora-solana-platforms tools (/Users/runner/work/certora-solana-platform-tools/) won't be stripped.
-        let cargo_home = std::env::var("CARGO_HOME")
+        let cargo_home = home::cargo_home()
             .ok()
             .map(std::path::PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")));
+            .or_else(|| home::home_dir().map(|h| h.join(".cargo")));
 
         if let Some(cargo_home) = cargo_home {
             // The VSCode debugger relies on the prefix /CARGO_HOME/ It will be replaced
