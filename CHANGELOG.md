@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+  - replace nightly `-Zremap-cwd-prefix` flag with custom path remap 
+### Fixed
+  - proper support for `--offline` flag 
+  - better validation for tool versions
+
 ## [0.3.2] - 2025-04-29
 
 ### Changed

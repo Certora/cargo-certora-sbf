@@ -2,6 +2,9 @@
 
 A Cargo subcommand that integrates [Certora](https://www.certora.com/) formal verification into Rust-based Solana BPF (SBF) smart contract development workflows.
 
+## Release
+
+**Current release:** `0.3.2`
 ## 📦 Installation
 
 ### Requirements ###
