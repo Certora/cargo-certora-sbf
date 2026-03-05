@@ -204,34 +204,40 @@ where
         .collect::<String>())
 }
 
-/// Validates that a version string is in the format `v<major>.<minor>`, e.g., `v1.41`.
+/// Validates that a version string is in the format `v<major>.<minor>` or
+/// `v<major>.<minor>.<patch>`, e.g., `v1.41` or `v1.43.1`.
 ///
 /// # Returns
 ///
 /// * `Ok(String)` containing the original version string if it is valid.
 /// * `Err(String)` with an error message if the version string:
 ///   - Does not start with a `v`
-///   - Does not contain exactly one dot
-///   - Has non-numeric major or minor components
+///   - Does not have exactly two or three dot-separated components
+///   - Has non-numeric major, minor, or patch components
 ///
 /// # Examples
 ///
 /// ```
 /// assert!(is_valid_tools_version_string("v1.41").is_ok());
+/// assert!(is_valid_tools_version_string("v1.43.1").is_ok());
 /// assert!(is_valid_tools_version_string("1.41").is_err());
-/// assert!(is_valid_tools_version_string("v1.41.0").is_err());
+/// assert!(is_valid_tools_version_string("v1").is_err());
 /// assert!(is_valid_tools_version_string("v1.x").is_err());
 /// ```
 fn is_valid_tools_version_string(arg: &str) -> Result<String, String> {
     if !arg.starts_with('v') {
-        return Err("Version must be in format v<major>.<minor>".to_string());
+        return Err(
+            "Version must be in format v<major>.<minor> or v<major>.<minor>.<patch>".to_string(),
+        );
     }
 
     let version_str = arg.strip_prefix('v').unwrap_or(arg);
 
     let parts: Vec<&str> = version_str.split('.').collect();
-    if parts.len() != 2 {
-        return Err("Version must be in format v<major>.<minor>".to_string());
+    if parts.len() != 2 && parts.len() != 3 {
+        return Err(
+            "Version must be in format v<major>.<minor> or v<major>.<minor>.<patch>".to_string(),
+        );
     }
 
     parts[0]
@@ -240,6 +246,11 @@ fn is_valid_tools_version_string(arg: &str) -> Result<String, String> {
     parts[1]
         .parse::<u64>()
         .map_err(|_| "Minor version must be a number")?;
+    if parts.len() == 3 {
+        parts[2]
+            .parse::<u64>()
+            .map_err(|_| "Patch version must be a number")?;
+    }
 
     Ok(arg.to_string())
 }
