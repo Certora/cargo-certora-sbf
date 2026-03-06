@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Changed
+  - allow tools versions with patch version (i.e., 3 number versions)
 
 ## [0.3.3] - 2026-03-02
 
