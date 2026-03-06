@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.3.4] - 2026-03-06
+
 ### Changed
   - allow tools versions with patch version (i.e., 3 number versions)
 
@@ -55,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/assert-rs/predicates-rs/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/assert-rs/predicates-rs/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/assert-rs/predicates-rs/compare/v0.3.0...v0.3.1
