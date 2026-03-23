@@ -1021,7 +1021,7 @@ fn main() {
         let arch_is_default = matches
             .subcommand()
             .and_then(|(_, sub)| sub.value_source("arch"))
-            .map_or(true, |src| src == ValueSource::DefaultValue);
+            .is_none_or(|src| src == ValueSource::DefaultValue);
 
         if args.arch == SbfArch::Sbf {
             if arch_is_default {
