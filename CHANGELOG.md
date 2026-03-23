@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Changed
+  - when tools version >= 1.53, default architecture is `v0` instead of `sbf`
+  - when tools version >= 1.53, limit allowed architectures to v0, v1, v2, v3
+
 ## [0.3.4] - 2026-03-06
 
 ### Changed

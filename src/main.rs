@@ -427,6 +427,14 @@ fn find_first_cdylib_target(package: &Package) -> Option<&Target> {
 /// - The implementation relies on specific environment variables and paths for
 ///   configuring the build process and linking the toolchain.
 impl CertoraSbfArgs {
+    /// Returns true if the configured tools version is at least `major.minor`.
+    fn is_tools_version_at_least(&self, major: u64, minor: u64) -> bool {
+        let normalized = to_semver(&self.tools_version);
+        Version::parse(&normalized)
+            .map(|v| (v.major, v.minor) >= (major, minor))
+            .unwrap_or(false)
+    }
+
     fn get_rustc_path(&self, ver: &str) -> PathBuf {
         self.platform_tools_path(ver)
             .join("rust")
@@ -990,7 +998,7 @@ fn main() {
     //     }
     // }
 
-    let CertoraSbfCargoCli::CertoraSbf(args) = CertoraSbfCargoCli::from_arg_matches(&matches)
+    let CertoraSbfCargoCli::CertoraSbf(mut args) = CertoraSbfCargoCli::from_arg_matches(&matches)
         .unwrap_or_else(|e| {
             e.exit();
         });
@@ -1005,6 +1013,28 @@ fn main() {
         })
         .filter_level(args.verbose.log_level_filter())
         .init();
+
+    // When tools version >= 1.53, the legacy `Sbf` arch is not supported.
+    // Adjust the default or error if explicitly requested.
+    if args.is_tools_version_at_least(1, 53) {
+        use clap::parser::ValueSource;
+        let arch_is_default = matches
+            .subcommand()
+            .and_then(|(_, sub)| sub.value_source("arch"))
+            .map_or(true, |src| src == ValueSource::DefaultValue);
+
+        if args.arch == SbfArch::Sbf {
+            if arch_is_default {
+                args.arch = SbfArch::V0;
+            } else {
+                error!(
+                    "architecture `sbf` is not supported with platform tools version >= v1.53. \
+                     Use one of: v0, v1, v2, v3"
+                );
+                exit(1);
+            }
+        }
+    }
 
     match args.exec() {
         Ok(json) => {
