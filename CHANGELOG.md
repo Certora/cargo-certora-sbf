@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.3.5] - 2026-03-27
+
 ### Changed
   - when tools version >= 1.53, default architecture is `v0` instead of `sbf`
   - when tools version >= 1.53, limit allowed architectures to v0, v1, v2, v3
@@ -61,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 <!-- next-url -->
-[Unreleased]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/Certora/cargo-certora-sbf/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/assert-rs/predicates-rs/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/assert-rs/predicates-rs/compare/v0.3.1...v0.3.2

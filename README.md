@@ -4,7 +4,7 @@ A Cargo subcommand that integrates [Certora](https://www.certora.com/) formal ve
 
 ## Release
 
-**Current release:** `0.3.4`
+**Current release:** `0.3.5`
 ## 📦 Installation
 
 ### Requirements ###
